@@ -1,8 +1,8 @@
 package fr.lkn.ganbare.ui.screens
 
+import android.app.TimePickerDialog
 import android.widget.Toast
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.CircularProgressIndicator
@@ -20,12 +20,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import fr.lkn.ganbare.ui.vm.SettingsViewModel
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -38,9 +38,10 @@ fun SettingsScreen(
     val state by vm.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
+    // booleans plus nécessaires avec le TimePicker natif (on affiche direct le dialog)
     Scaffold(
         topBar = {
-            CenterAlignedTopAppBar(title = { Text("Récap quotidien") })
+            CenterAlignedTopAppBar(title = { Text("Récap & Réglages") })
         }
     ) { padding ->
         Column(
@@ -81,24 +82,60 @@ fun SettingsScreen(
                 )
             }
 
-            // Heure HH:mm
-            var timeText by remember(state.hour, state.minute) {
-                mutableStateOf("%02d:%02d".format(state.hour, state.minute))
-            }
-            OutlinedTextField(
-                value = timeText,
-                onValueChange = {
-                    timeText = it
-                    vm.onTimeTextChange(it)
-                },
-                label = { Text("Heure du récap (HH:mm)") },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                isError = state.timeError != null,
-                supportingText = {
-                    state.timeError?.let { Text(it) }
-                },
+            // Heure du récap — bouton + TimePicker natif
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
                 modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Heure du récap", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        formatTime(state.hour, state.minute),
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                }
+                Button(onClick = {
+                    showTimePickerDialog(
+                        context = context,
+                        initialHour = state.hour,
+                        initialMinute = state.minute
+                    ) { h, m -> vm.onHourMinuteChange(h, m) }
+                }) {
+                    Text("Modifier")
+                }
+            }
+
+            // Séparateur visuel
+            Spacer(Modifier.height(8.dp))
+            Text("Planning", style = MaterialTheme.typography.titleMedium)
+
+            // Heure de bascule vers J+1 — bouton + TimePicker natif
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Bascule vers J+1 à partir de", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        formatTime(state.switchHour, state.switchMinute),
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                }
+                Button(onClick = {
+                    showTimePickerDialog(
+                        context = context,
+                        initialHour = state.switchHour,
+                        initialMinute = state.switchMinute
+                    ) { h, m -> vm.onSwitchHourMinuteChange(h, m) }
+                }) {
+                    Text("Modifier")
+                }
+            }
+            AssistiveInfo(
+                "Avant cette heure, le Planning affiche AUJOURD’HUI ; " +
+                        "à partir de cette heure, il affiche DEMAIN."
             )
 
             Spacer(Modifier.height(8.dp))
@@ -107,9 +144,7 @@ fun SettingsScreen(
             Button(
                 onClick = {
                     vm.saveAll()
-                    if (state.timeError == null) {
-                        Toast.makeText(context, "Préférences sauvegardées", Toast.LENGTH_SHORT).show()
-                    }
+                    Toast.makeText(context, "Préférences sauvegardées", Toast.LENGTH_SHORT).show()
                 },
                 enabled = !state.isSaving
             ) {
@@ -123,21 +158,28 @@ fun SettingsScreen(
                 Text("Sauvegarder")
             }
 
-            if (state.savedOnce && state.timeError == null) {
-                Text(
-                    "✅ Sauvegardé (URL, activation, heure).",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.primary
-                )
-            }
-
             Spacer(Modifier.weight(1f))
             Text(
-                "Astuce : on planifiera ensuite une notification quotidienne à l’heure choisie.",
+                "Astuce : la bascule n’affecte que la date par défaut à l’ouverture du Planning.",
                 style = MaterialTheme.typography.bodySmall
             )
         }
     }
+}
+
+private fun showTimePickerDialog(
+    context: android.content.Context,
+    initialHour: Int,
+    initialMinute: Int,
+    onTimePicked: (Int, Int) -> Unit
+) {
+    TimePickerDialog(
+        context,
+        { _, hourOfDay, minute -> onTimePicked(hourOfDay, minute) },
+        initialHour.coerceIn(0, 23),
+        initialMinute.coerceIn(0, 59),
+        true // 24h
+    ).show()
 }
 
 @Composable
@@ -148,3 +190,6 @@ private fun AssistiveInfo(text: String) {
         color = MaterialTheme.colorScheme.onSurfaceVariant
     )
 }
+
+private fun formatTime(h: Int, m: Int): String =
+    String.format(Locale.getDefault(), "%02d:%02d", h, m)

@@ -17,6 +17,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import fr.lkn.ganbare.core.prefs.PreferencesManager
 import fr.lkn.ganbare.domain.calendar.CalendarEvent
 import fr.lkn.ganbare.domain.calendar.CalendarRepositoryImpl
 import fr.lkn.ganbare.ui.vm.PlanningViewModel
@@ -31,7 +32,8 @@ fun PlanningScreen(
     viewModel: PlanningViewModel = run {
         val ctx = LocalContext.current.applicationContext
         val repo = remember { CalendarRepositoryImpl(ctx) }
-        viewModel(factory = PlanningViewModel.factory(repo))
+        val prefs = remember { PreferencesManager(ctx) }
+        viewModel(factory = PlanningViewModel.factory(repo, prefs))
     }
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -41,7 +43,7 @@ fun PlanningScreen(
             date = state.selectedDate,
             onPrev = viewModel::previousDay,
             onNext = viewModel::nextDay,
-            onReset = viewModel::resetToTomorrow
+            onResetAuto = viewModel::resetToAuto
         )
 
         when {
@@ -69,7 +71,7 @@ private fun DateNavigator(
     date: LocalDate,
     onPrev: () -> Unit,
     onNext: () -> Unit,
-    onReset: () -> Unit
+    onResetAuto: () -> Unit
 ) {
     val locale = Locale.getDefault()
     val dateFmt = DateTimeFormatter.ofPattern("EEEE d MMMM yyyy", locale)
@@ -92,7 +94,7 @@ private fun DateNavigator(
                 },
                 style = MaterialTheme.typography.titleMedium
             )
-            TextButton(onClick = onReset, content = { Text("Revenir à demain") })
+            TextButton(onClick = onResetAuto, content = { Text("Revenir (auto)") })
         }
 
         IconButton(onClick = onNext) {

@@ -17,6 +17,12 @@ data class SettingsUiState(
     val hour: Int = 20,
     val minute: Int = 0,
     val timeError: String? = null,
+
+    // Bascule J+1
+    val switchHour: Int = 18,
+    val switchMinute: Int = 0,
+    val switchTimeError: String? = null,
+
     val isSaving: Boolean = false,
     val savedOnce: Boolean = false
 )
@@ -35,7 +41,9 @@ class SettingsViewModel(
                     icalUrl = s.icalUrl,
                     recapEnabled = s.recapEnabled,
                     hour = s.recapHour,
-                    minute = s.recapMinute
+                    minute = s.recapMinute,
+                    switchHour = s.switchHour,
+                    switchMinute = s.switchMinute
                 )
             }
         }
@@ -49,7 +57,7 @@ class SettingsViewModel(
         _state.value = _state.value.copy(recapEnabled = enabled, savedOnce = false)
     }
 
-    /** Saisie directe "HH:mm" */
+    /** Saisie "HH:mm" pour l'heure du récap */
     fun onTimeTextChange(text: String) {
         val regex = Regex("""^\s*([01]?\d|2[0-3]):([0-5]\d)\s*$""")
         if (regex.matches(text)) {
@@ -66,17 +74,49 @@ class SettingsViewModel(
         _state.value = _state.value.copy(hour = hour, minute = minute, timeError = null, savedOnce = false)
     }
 
+    /** Saisie "HH:mm" pour l'heure de bascule vers J+1 */
+    fun onSwitchTimeTextChange(text: String) {
+        val regex = Regex("""^\s*([01]?\d|2[0-3]):([0-5]\d)\s*$""")
+        if (regex.matches(text)) {
+            val (hStr, mStr) = text.trim().split(":")
+            val h = hStr.toInt()
+            val m = mStr.toInt()
+            _state.value = _state.value.copy(
+                switchHour = h,
+                switchMinute = m,
+                switchTimeError = null,
+                savedOnce = false
+            )
+        } else {
+            _state.value = _state.value.copy(switchTimeError = "Format attendu HH:mm")
+        }
+    }
+
+    fun onSwitchHourMinuteChange(hour: Int, minute: Int) {
+        _state.value = _state.value.copy(
+            switchHour = hour,
+            switchMinute = minute,
+            switchTimeError = null,
+            savedOnce = false
+        )
+    }
+
     fun saveAll() {
         val st = _state.value
-        if (st.timeError != null) return
+        if (st.timeError != null || st.switchTimeError != null) return
         viewModelScope.launch {
             _state.value = _state.value.copy(isSaving = true)
+
+            // Sauvegarde URL iCal + recap
             prefs.updateAll(
                 url = st.icalUrl,
                 enabled = st.recapEnabled,
                 hour = st.hour,
                 minute = st.minute
             )
+            // Sauvegarde heure de bascule Planning
+            prefs.setSwitchTime(st.switchHour, st.switchMinute)
+
             _state.value = _state.value.copy(isSaving = false, savedOnce = true)
         }
     }
