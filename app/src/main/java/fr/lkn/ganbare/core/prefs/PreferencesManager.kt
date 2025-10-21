@@ -1,43 +1,94 @@
 package fr.lkn.ganbare.core.prefs
 
 import android.content.Context
-import androidx.datastore.preferences.core.*
-import androidx.datastore.preferences.preferencesDataStore
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.map
-import java.time.LocalTime
+import android.content.SharedPreferences
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
 
-private val Context.dataStore by preferencesDataStore(name = "settings")
+private const val PREFS_NAME = "ganbare_prefs"
+private const val KEY_ICAL_URL = "ical_url"
+private const val KEY_RECAP_ENABLED = "recap_enabled"
+private const val KEY_RECAP_HOUR = "recap_hour"
+private const val KEY_RECAP_MINUTE = "recap_minute"
 
-class PreferencesManager(private val context: Context) {
-    companion object {
-        private val KEY_ICAL_URL = stringPreferencesKey("ical_url")
-        private val KEY_DAILY_ENABLED = booleanPreferencesKey("daily_enabled")
-        private val KEY_DAILY_HOUR = intPreferencesKey("daily_hour")
-        private val KEY_DAILY_MINUTE = intPreferencesKey("daily_minute")
+// Valeurs par défaut
+private const val DEFAULT_ICAL_URL = ""
+private const val DEFAULT_RECAP_ENABLED = false
+private const val DEFAULT_RECAP_HOUR = 20
+private const val DEFAULT_RECAP_MINUTE = 0
+
+data class Settings(
+    val icalUrl: String = DEFAULT_ICAL_URL,
+    val recapEnabled: Boolean = DEFAULT_RECAP_ENABLED,
+    val recapHour: Int = DEFAULT_RECAP_HOUR,     // 0..23
+    val recapMinute: Int = DEFAULT_RECAP_MINUTE  // 0..59
+)
+
+class PreferencesManager(appContext: Context) {
+
+    private val prefs: SharedPreferences =
+        appContext.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+
+    private val scope = CoroutineScope(Dispatchers.IO)
+
+    private val _settingsFlow = MutableStateFlow(readAll())
+    val settingsFlow: StateFlow<Settings> = _settingsFlow
+
+    private val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
+        _settingsFlow.value = readAll()
     }
 
-    data class Settings(
-        val icalUrl: String = "",
-        val dailyEnabled: Boolean = true,
-        val dailyTime: LocalTime = LocalTime.of(18, 0)
-    )
+    init {
+        prefs.registerOnSharedPreferenceChangeListener(listener)
+    }
 
-    val settingsFlow: Flow<Settings> = context.dataStore.data.map { p ->
-        Settings(
-            icalUrl = p[KEY_ICAL_URL] ?: "",
-            dailyEnabled = p[KEY_DAILY_ENABLED] ?: true,
-            dailyTime = LocalTime.of(
-                p[KEY_DAILY_HOUR] ?: 18,
-                p[KEY_DAILY_MINUTE] ?: 0
-            )
+    private fun readAll(): Settings {
+        return Settings(
+            icalUrl = prefs.getString(KEY_ICAL_URL, DEFAULT_ICAL_URL) ?: DEFAULT_ICAL_URL,
+            recapEnabled = prefs.getBoolean(KEY_RECAP_ENABLED, DEFAULT_RECAP_ENABLED),
+            recapHour = prefs.getInt(KEY_RECAP_HOUR, DEFAULT_RECAP_HOUR),
+            recapMinute = prefs.getInt(KEY_RECAP_MINUTE, DEFAULT_RECAP_MINUTE)
         )
     }
 
-    suspend fun updateIcalUrl(url: String) = context.dataStore.edit { it[KEY_ICAL_URL] = url }
-    suspend fun updateDailyEnabled(enabled: Boolean) = context.dataStore.edit { it[KEY_DAILY_ENABLED] = enabled }
-    suspend fun updateDailyTime(time: LocalTime) = context.dataStore.edit {
-        it[KEY_DAILY_HOUR] = time.hour
-        it[KEY_DAILY_MINUTE] = time.minute
+    fun current(): Settings = readAll()
+
+    fun setIcalUrl(url: String) {
+        scope.launch {
+            prefs.edit().putString(KEY_ICAL_URL, url.trim()).apply()
+        }
+    }
+
+    fun setRecapEnabled(enabled: Boolean) {
+        scope.launch {
+            prefs.edit().putBoolean(KEY_RECAP_ENABLED, enabled).apply()
+        }
+    }
+
+    fun setRecapTime(hour: Int, minute: Int) {
+        val h = hour.coerceIn(0, 23)
+        val m = minute.coerceIn(0, 59)
+        scope.launch {
+            prefs.edit()
+                .putInt(KEY_RECAP_HOUR, h)
+                .putInt(KEY_RECAP_MINUTE, m)
+                .apply()
+        }
+    }
+
+    fun updateAll(url: String, enabled: Boolean, hour: Int, minute: Int) {
+        val h = hour.coerceIn(0, 23)
+        val m = minute.coerceIn(0, 59)
+        scope.launch {
+            prefs.edit()
+                .putString(KEY_ICAL_URL, url.trim())
+                .putBoolean(KEY_RECAP_ENABLED, enabled)
+                .putInt(KEY_RECAP_HOUR, h)
+                .putInt(KEY_RECAP_MINUTE, m)
+                .apply()
+        }
     }
 }

@@ -5,18 +5,28 @@ import android.content.Context
 import android.content.Intent
 import fr.lkn.ganbare.core.prefs.PreferencesManager
 import fr.lkn.ganbare.core.work.Scheduler
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.launch
 
+/**
+ * Relancé au BOOT et lors des mises à jour du package pour
+ * reprogrammer (ou annuler) la notif quotidienne selon les préférences.
+ */
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
-        if (intent?.action == Intent.ACTION_BOOT_COMPLETED) {
+        val action = intent?.action ?: return
+        if (
+            action == Intent.ACTION_BOOT_COMPLETED ||
+            action == Intent.ACTION_MY_PACKAGE_REPLACED
+        ) {
             val prefs = PreferencesManager(context)
-            CoroutineScope(Dispatchers.Default).launch {
-                val s = prefs.settingsFlow.first()
-                if (s.dailyEnabled) Scheduler.scheduleDailyAt(context, s.dailyTime)
+            val s = prefs.current()
+            if (s.recapEnabled) {
+                Scheduler.scheduleDailySummary(
+                    context = context,
+                    hour = s.recapHour,
+                    minute = s.recapMinute
+                )
+            } else {
+                Scheduler.cancelDailySummary(context)
             }
         }
     }
