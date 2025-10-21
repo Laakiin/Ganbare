@@ -7,26 +7,20 @@ import fr.lkn.ganbare.core.prefs.PreferencesManager
 import fr.lkn.ganbare.core.work.Scheduler
 
 /**
- * Relancé au BOOT et lors des mises à jour du package pour
- * reprogrammer (ou annuler) la notif quotidienne selon les préférences.
+ * Reprogramme (ou annule) la notif quotidienne au boot et après mise à jour d’app.
  */
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
-        val action = intent?.action ?: return
-        if (
-            action == Intent.ACTION_BOOT_COMPLETED ||
-            action == Intent.ACTION_MY_PACKAGE_REPLACED
-        ) {
-            val prefs = PreferencesManager(context)
-            val s = prefs.current()
-            if (s.recapEnabled) {
-                Scheduler.scheduleDailySummary(
-                    context = context,
-                    hour = s.recapHour,
-                    minute = s.recapMinute
-                )
-            } else {
-                Scheduler.cancelDailySummary(context)
+        when (intent?.action) {
+            Intent.ACTION_BOOT_COMPLETED,
+            Intent.ACTION_MY_PACKAGE_REPLACED -> {
+                val prefs = PreferencesManager(context)
+                val s = prefs.current()
+                if (s.recapEnabled) {
+                    Scheduler.scheduleDailySummary(context, s.recapHour, s.recapMinute)
+                } else {
+                    Scheduler.cancelDailySummary(context)
+                }
             }
         }
     }

@@ -11,7 +11,8 @@ import javax.inject.Singleton
 import fr.lkn.ganbare.core.db.AppDatabase
 import fr.lkn.ganbare.core.prefs.PreferencesManager
 import fr.lkn.ganbare.feature.tasks.data.TaskDao
-import fr.lkn.ganbare.core.ical.IcalRepository
+import fr.lkn.ganbare.domain.calendar.CalendarRepository
+import fr.lkn.ganbare.domain.calendar.CalendarRepositoryImpl
 import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
 
@@ -20,8 +21,10 @@ import java.util.concurrent.TimeUnit
 object AppModule {
 
     @Provides @Singleton
-    fun provideDatabase(@ApplicationContext ctx: Context): AppDatabase =
-        Room.databaseBuilder(ctx, AppDatabase::class.java, "ganbare.db").build()
+    fun provideDb(@ApplicationContext ctx: Context): AppDatabase =
+        Room.databaseBuilder(ctx, AppDatabase::class.java, "ganbare.db")
+            .fallbackToDestructiveMigration()
+            .build()
 
     @Provides
     fun provideTaskDao(db: AppDatabase): TaskDao = db.taskDao()
@@ -38,6 +41,6 @@ object AppModule {
             .build()
 
     @Provides @Singleton
-    fun provideIcalRepo(client: OkHttpClient): IcalRepository =
-        IcalRepository(client)
+    fun provideCalendarRepository(@ApplicationContext ctx: Context): CalendarRepository =
+        CalendarRepositoryImpl(ctx)
 }

@@ -6,6 +6,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import fr.lkn.ganbare.core.prefs.PreferencesManager
 import fr.lkn.ganbare.core.prefs.Settings
+import fr.lkn.ganbare.core.work.Scheduler
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
@@ -14,20 +15,17 @@ import kotlinx.coroutines.launch
 data class SettingsUiState(
     val icalUrl: String = "",
     val recapEnabled: Boolean = false,
-    val hour: Int = 20,
-    val minute: Int = 0,
-    val timeError: String? = null,
-
-    // Bascule J+1
+    val recapHour: Int = 20,
+    val recapMinute: Int = 0,
     val switchHour: Int = 18,
     val switchMinute: Int = 0,
-    val switchTimeError: String? = null,
-
     val isSaving: Boolean = false,
-    val savedOnce: Boolean = false
+    val savedOnce: Boolean = false,
+    val error: String? = null
 )
 
 class SettingsViewModel(
+    private val appContext: Context,
     private val prefs: PreferencesManager
 ) : ViewModel() {
 
@@ -36,12 +34,12 @@ class SettingsViewModel(
 
     init {
         viewModelScope.launch {
-            prefs.settingsFlow.collectLatest { s: Settings ->
+            prefs.settingsFlow.collectLatest { s ->
                 _state.value = _state.value.copy(
                     icalUrl = s.icalUrl,
                     recapEnabled = s.recapEnabled,
-                    hour = s.recapHour,
-                    minute = s.recapMinute,
+                    recapHour = s.recapHour,
+                    recapMinute = s.recapMinute,
                     switchHour = s.switchHour,
                     switchMinute = s.switchMinute
                 )
@@ -49,75 +47,34 @@ class SettingsViewModel(
         }
     }
 
-    fun onIcalUrlChange(url: String) {
-        _state.value = _state.value.copy(icalUrl = url, savedOnce = false)
-    }
-
-    fun onRecapEnabledChange(enabled: Boolean) {
-        _state.value = _state.value.copy(recapEnabled = enabled, savedOnce = false)
-    }
-
-    /** Saisie "HH:mm" pour l'heure du récap */
-    fun onTimeTextChange(text: String) {
-        val regex = Regex("""^\s*([01]?\d|2[0-3]):([0-5]\d)\s*$""")
-        if (regex.matches(text)) {
-            val (hStr, mStr) = text.trim().split(":")
-            val h = hStr.toInt()
-            val m = mStr.toInt()
-            _state.value = _state.value.copy(hour = h, minute = m, timeError = null, savedOnce = false)
-        } else {
-            _state.value = _state.value.copy(timeError = "Format attendu HH:mm")
-        }
-    }
-
-    fun onHourMinuteChange(hour: Int, minute: Int) {
-        _state.value = _state.value.copy(hour = hour, minute = minute, timeError = null, savedOnce = false)
-    }
-
-    /** Saisie "HH:mm" pour l'heure de bascule vers J+1 */
-    fun onSwitchTimeTextChange(text: String) {
-        val regex = Regex("""^\s*([01]?\d|2[0-3]):([0-5]\d)\s*$""")
-        if (regex.matches(text)) {
-            val (hStr, mStr) = text.trim().split(":")
-            val h = hStr.toInt()
-            val m = mStr.toInt()
-            _state.value = _state.value.copy(
-                switchHour = h,
-                switchMinute = m,
-                switchTimeError = null,
-                savedOnce = false
-            )
-        } else {
-            _state.value = _state.value.copy(switchTimeError = "Format attendu HH:mm")
-        }
-    }
-
-    fun onSwitchHourMinuteChange(hour: Int, minute: Int) {
-        _state.value = _state.value.copy(
-            switchHour = hour,
-            switchMinute = minute,
-            switchTimeError = null,
-            savedOnce = false
-        )
-    }
+    // --- edits depuis l'UI ---
+    fun onIcalUrlChange(url: String) { _state.value = _state.value.copy(icalUrl = url) }
+    fun onRecapEnabledChange(enabled: Boolean) { _state.value = _state.value.copy(recapEnabled = enabled) }
+    fun onHourMinuteChange(hour: Int, minute: Int) { _state.value = _state.value.copy(recapHour = hour, recapMinute = minute) }
+    fun onSwitchHourMinuteChange(hour: Int, minute: Int) { _state.value = _state.value.copy(switchHour = hour, switchMinute = minute) }
 
     fun saveAll() {
-        val st = _state.value
-        if (st.timeError != null || st.switchTimeError != null) return
+        val s = _state.value
+        _state.value = s.copy(isSaving = true, error = null)
         viewModelScope.launch {
-            _state.value = _state.value.copy(isSaving = true)
+            try {
+                // Sauvegarde
+                prefs.setIcalUrl(s.icalUrl)
+                prefs.setRecapEnabled(s.recapEnabled)
+                prefs.setRecapTime(s.recapHour, s.recapMinute)
+                prefs.setSwitchTime(s.switchHour, s.switchMinute)
 
-            // Sauvegarde URL iCal + recap
-            prefs.updateAll(
-                url = st.icalUrl,
-                enabled = st.recapEnabled,
-                hour = st.hour,
-                minute = st.minute
-            )
-            // Sauvegarde heure de bascule Planning
-            prefs.setSwitchTime(st.switchHour, st.switchMinute)
+                // Planification IMMÉDIATE selon l’état
+                if (s.recapEnabled) {
+                    Scheduler.scheduleDailySummary(appContext, s.recapHour, s.recapMinute)
+                } else {
+                    Scheduler.cancelDailySummary(appContext)
+                }
 
-            _state.value = _state.value.copy(isSaving = false, savedOnce = true)
+                _state.value = _state.value.copy(isSaving = false, savedOnce = true)
+            } catch (e: Exception) {
+                _state.value = _state.value.copy(isSaving = false, error = e.message ?: "Erreur inconnue")
+            }
         }
     }
 
@@ -126,7 +83,7 @@ class SettingsViewModel(
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
                 val pm = PreferencesManager(context.applicationContext)
-                return SettingsViewModel(pm) as T
+                return SettingsViewModel(context.applicationContext, pm) as T
             }
         }
     }
