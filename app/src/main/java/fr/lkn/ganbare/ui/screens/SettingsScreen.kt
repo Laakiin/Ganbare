@@ -12,6 +12,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import fr.lkn.ganbare.core.reminders.Recurrence
+import fr.lkn.ganbare.ui.vm.RecurrenceUiState
+import fr.lkn.ganbare.ui.vm.SettingsViewModel
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 
@@ -21,7 +23,6 @@ fun SettingsScreen(
     vm: SettingsViewModel = viewModel(),
 ) {
     val ui by vm.ui.collectAsState()
-    val tf = remember { DateTimeFormatter.ofPattern("HH:mm") }
     var tabIndex by remember { mutableStateOf(0) }
 
     Scaffold(
@@ -54,15 +55,24 @@ fun SettingsScreen(
                     onP4 = vm::setP4,
                     onDayBefore = vm::toggleDayBefore,
                     onTwoHours = vm::toggleTwoHours,
-                    onOnDay = vm::toggleOnDay
+                    onOnDay = vm::toggleOnDay,
+                    onTestDayBefore = vm::testTaskDayBefore,
+                    onTestTwoHours = vm::testTaskTwoHours,
+                    onTestOnDay = vm::testTaskOnDay
                 )
                 1 -> PlanningSettingsTab(
                     summaryTime = ui.dailySummaryTime,
                     firstEventInfoTime = ui.firstEventInfoTime,
                     rolloverTime = ui.agendaRolloverTime,
+                    enableDailySummary = ui.enableDailySummary,
+                    enableFirstEventInfo = ui.enableFirstEventInfo,
                     onSummaryTime = vm::setDailySummaryTime,
                     onFirstEventTime = vm::setFirstEventInfoTime,
-                    onRolloverTime = vm::setAgendaRolloverTime
+                    onRolloverTime = vm::setAgendaRolloverTime,
+                    onEnableSummary = vm::toggleEnableDailySummary,
+                    onEnableFirstEvent = vm::toggleEnableFirstEventInfo,
+                    onTestSummary = vm::testDailySummary,
+                    onTestFirstEvent = vm::testFirstEventInfo
                 )
             }
 
@@ -93,7 +103,10 @@ private fun TasksSettingsTab(
     onP4: (Recurrence) -> Unit,
     onDayBefore: (Boolean) -> Unit,
     onTwoHours: (Boolean) -> Unit,
-    onOnDay: (Boolean) -> Unit
+    onOnDay: (Boolean) -> Unit,
+    onTestDayBefore: () -> Unit,
+    onTestTwoHours: () -> Unit,
+    onTestOnDay: () -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -120,6 +133,15 @@ private fun TasksSettingsTab(
             "Astuce : les rappels « veille » et « jour J » utilisent l’heure du récap définie dans l’onglet Planning.",
             style = MaterialTheme.typography.bodySmall
         )
+
+        Divider()
+
+        Text("Tester les notifications de tâches", style = MaterialTheme.typography.titleMedium)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = onTestDayBefore) { Text("Tester veille") }
+            OutlinedButton(onClick = onTestTwoHours) { Text("Tester 2 h avant") }
+            OutlinedButton(onClick = onTestOnDay) { Text("Tester jour J") }
+        }
     }
 }
 
@@ -128,9 +150,15 @@ private fun PlanningSettingsTab(
     summaryTime: LocalTime,
     firstEventInfoTime: LocalTime,
     rolloverTime: LocalTime,
+    enableDailySummary: Boolean,
+    enableFirstEventInfo: Boolean,
     onSummaryTime: (LocalTime) -> Unit,
     onFirstEventTime: (LocalTime) -> Unit,
-    onRolloverTime: (LocalTime) -> Unit
+    onRolloverTime: (LocalTime) -> Unit,
+    onEnableSummary: (Boolean) -> Unit,
+    onEnableFirstEvent: (Boolean) -> Unit,
+    onTestSummary: () -> Unit,
+    onTestFirstEvent: () -> Unit
 ) {
     val tf = remember { DateTimeFormatter.ofPattern("HH:mm") }
 
@@ -142,6 +170,20 @@ private fun PlanningSettingsTab(
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         Text("Paramètres du planning", style = MaterialTheme.typography.titleMedium)
+
+        // Switchs d’activation/désactivation des notifs planning
+        SwitchRow(
+            label = "Activer la notif « Récap quotidien »",
+            checked = enableDailySummary,
+            onCheckedChange = onEnableSummary
+        )
+        SwitchRow(
+            label = "Activer la notif « 1er évènement de demain »",
+            checked = enableFirstEventInfo,
+            onCheckedChange = onEnableFirstEvent
+        )
+
+        Divider()
 
         TimePickerRow(
             label = "Heure du récap quotidien",
@@ -163,6 +205,14 @@ private fun PlanningSettingsTab(
             onPick = onRolloverTime,
             tf = tf
         )
+
+        Divider()
+
+        Text("Tester les notifications de planning", style = MaterialTheme.typography.titleMedium)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = onTestSummary) { Text("Tester récap") }
+            OutlinedButton(onClick = onTestFirstEvent) { Text("Tester 1er évènement") }
+        }
     }
 }
 
@@ -171,7 +221,7 @@ private fun TimePickerRow(
     label: String,
     time: LocalTime,
     onPick: (LocalTime) -> Unit,
-    tf: DateTimeFormatter
+    tf: java.time.format.DateTimeFormatter
 ) {
     val ctx = LocalContext.current
     Row(
