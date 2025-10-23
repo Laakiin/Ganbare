@@ -1,40 +1,76 @@
-package fr.lkn.ganbare.core.notify
+package fr.lkn.ganbare.core.work
 
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
-import android.content.Intent
+import android.os.Build
 import androidx.core.app.NotificationCompat
-import androidx.core.app.NotificationManagerCompat
-import fr.lkn.ganbare.MainActivity
-import fr.lkn.ganbare.R
 
-class Notifier(private val context: Context) {
+object Notifier {
 
-    private val nm = NotificationManagerCompat.from(context)
+    private const val CHANNEL_DAILY = "ganbare_daily"
+    private const val CHANNEL_TASKS = "ganbare_tasks"
 
-    fun showDailySummary(title: String, text: String) {
-        NotificationChannels.ensure(context)
-
-        val intent = Intent(context, MainActivity::class.java).apply {
-            putExtra("open_tab", "planning")
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-        }
-        val pi = PendingIntent.getActivity(
-            context,
-            1001,
-            intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+    private fun ensureChannels(ctx: Context) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val channels = listOf(
+            NotificationChannel(
+                CHANNEL_DAILY,
+                "Récap quotidien",
+                NotificationManager.IMPORTANCE_DEFAULT
+            ).apply { description = "Notifications du récap quotidien (planning du lendemain)." },
+            NotificationChannel(
+                CHANNEL_TASKS,
+                "Rappels de tâches",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply { description = "Rappels des tâches/devoirs/examens." }
         )
+        nm.createNotificationChannels(channels)
+    }
 
-        val notif = NotificationCompat.Builder(context, NotificationChannels.CHANNEL_DAILY)
-            .setSmallIcon(R.drawable.ic_notification)
+    fun showDailySummary(
+        ctx: Context,
+        notificationId: Int,
+        title: String,
+        text: String,
+        contentIntent: PendingIntent? = null
+    ) {
+        ensureChannels(ctx)
+        val nb = NotificationCompat.Builder(ctx, CHANNEL_DAILY)
+            .setSmallIcon(android.R.drawable.ic_dialog_info) // icône système pour éviter une res manquante
             .setContentTitle(title)
             .setContentText(text)
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setAutoCancel(true)
-            .setContentIntent(pi)
-            .build()
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
 
-        nm.notify(1001, notif)
+        contentIntent?.let { nb.setContentIntent(it) }
+
+        (ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
+            .notify(notificationId, nb.build())
+    }
+
+    fun showTaskReminder(
+        ctx: Context,
+        notificationId: Int,
+        title: String,
+        text: String,
+        contentIntent: PendingIntent? = null
+    ) {
+        ensureChannels(ctx)
+        val nb = NotificationCompat.Builder(ctx, CHANNEL_TASKS)
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+
+        contentIntent?.let { nb.setContentIntent(it) }
+
+        (ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
+            .notify(notificationId, nb.build())
     }
 }

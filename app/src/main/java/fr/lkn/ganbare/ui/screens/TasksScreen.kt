@@ -5,242 +5,228 @@ import android.app.TimePickerDialog
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.Button
-import androidx.compose.material3.Divider
+import androidx.compose.material3.*
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import fr.lkn.ganbare.core.db.AppDatabase
-import fr.lkn.ganbare.feature.tasks.data.TaskEntity
-import fr.lkn.ganbare.feature.tasks.data.TaskRepository
 import fr.lkn.ganbare.ui.vm.TasksViewModel
+import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.ZoneId
+import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
-import java.util.Locale
+import java.util.Calendar
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TasksScreen(
-    vm: TasksViewModel = run {
-        val ctx = LocalContext.current.applicationContext
-        val repo = remember {
-            TaskRepository(AppDatabase.getDatabase(ctx).taskDao())
-        }
-        viewModel(factory = TasksViewModel.factory(repo))
-    }
+    vm: TasksViewModel = viewModel()
 ) {
-    val state by vm.state.collectAsStateWithLifecycle()
-    val new by vm.new.collectAsStateWithLifecycle()
+    val ctx = LocalContext.current
+
+    // --- État UI local pour la création d’une tâche ---
+    var title by remember { mutableStateOf("") }
+
+    var selectedDate by remember { mutableStateOf(LocalDate.now()) }
+    var hasDueTime by remember { mutableStateOf(false) }
+    var selectedTime by remember { mutableStateOf(LocalTime.of(8, 0)) }
+
+    val df = remember { DateTimeFormatter.ISO_LOCAL_DATE }
+    val tf = remember { DateTimeFormatter.ofPattern("HH:mm") }
+
+    // Liste des tâches (depuis VM)
+    val tasks by vm.tasks.collectAsState()
+
+    // --- Dialog pickers ---
+    fun openDatePicker() {
+        val cal = Calendar.getInstance().apply {
+            set(Calendar.YEAR, selectedDate.year)
+            set(Calendar.MONTH, selectedDate.monthValue - 1)
+            set(Calendar.DAY_OF_MONTH, selectedDate.dayOfMonth)
+        }
+        DatePickerDialog(
+            ctx,
+            { _, y, m, d -> selectedDate = LocalDate.of(y, m + 1, d) },
+            cal.get(Calendar.YEAR),
+            cal.get(Calendar.MONTH),
+            cal.get(Calendar.DAY_OF_MONTH)
+        ).show()
+    }
+
+    fun openTimePicker() {
+        TimePickerDialog(
+            ctx,
+            { _, h, m -> selectedTime = LocalTime.of(h, m) },
+            selectedTime.hour,
+            selectedTime.minute,
+            true
+        ).show()
+    }
 
     Scaffold(
         topBar = { TopAppBar(title = { Text("Tâches") }) }
-    ) { padding ->
-        Column(
-            Modifier
-                .padding(padding)
-                .fillMaxSize()
-        ) {
-            // ---- Formulaire d'ajout ----
-            Column(
-                modifier = Modifier
-                    .padding(16.dp)
-                    .fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                OutlinedTextField(
-                    value = new.title,
-                    onValueChange = vm::onTitleChange,
-                    label = { Text("Titre de la tâche") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
+    ) { paddings ->
 
+        Column(
+            modifier = Modifier
+                .padding(paddings)
+                .padding(16.dp)
+                .fillMaxSize(),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+
+            // ---- Formulaire création ----
+            Text("Ajouter une tâche", style = MaterialTheme.typography.titleMedium)
+
+            OutlinedTextField(
+                value = title,
+                onValueChange = { title = it },
+                label = { Text("Titre") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
+            )
+
+            // Date
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Date", style = MaterialTheme.typography.labelLarge)
+                    Text(selectedDate.format(df), style = MaterialTheme.typography.bodyMedium)
+                }
+                OutlinedButton(onClick = { openDatePicker() }) { Text("Choisir") }
+            }
+
+            // Heure
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Switch(checked = hasDueTime, onCheckedChange = { hasDueTime = it })
+                Text("Spécifier une heure")
+            }
+            if (hasDueTime) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text("Priorité :", style = MaterialTheme.typography.bodyMedium)
-                    PriorityChips(
-                        selected = new.priority,
-                        onSelect = vm::onPriorityChange
-                    )
-                }
-
-                // Sélecteurs natifs Date & Heure
-                DateTimePickersRow(
-                    date = new.date,
-                    onPickDate = { vm.onDatePicked(it) },
-                    hasTime = new.hasDueTime,
-                    time = new.time,
-                    onPickTime = { vm.onTimePicked(it) },
-                    onClearTime = vm::clearTime
-                )
-
-                Button(
-                    onClick = vm::addTask,
-                    enabled = new.title.isNotBlank(),
-                    modifier = Modifier.align(Alignment.End)
-                ) {
-                    Text("Ajouter")
+                    Column(Modifier.weight(1f)) {
+                        Text("Heure", style = MaterialTheme.typography.labelLarge)
+                        Text(selectedTime.format(tf), style = MaterialTheme.typography.bodyMedium)
+                    }
+                    OutlinedButton(onClick = { openTimePicker() }) { Text("Choisir") }
                 }
             }
+
+            // Priorité simple
+            var showPrioMenu by remember { mutableStateOf(false) }
+            val priorities = listOf("P1", "P2", "P3", "P4")
+            var priorityIndex by remember { mutableStateOf(0) }
+            Box {
+                OutlinedButton(onClick = { showPrioMenu = true }) {
+                    Text("Priorité : ${priorities[priorityIndex]}")
+                }
+                DropdownMenu(expanded = showPrioMenu, onDismissRequest = { showPrioMenu = false }) {
+                    priorities.forEachIndexed { idx, label ->
+                        DropdownMenuItem(
+                            text = { Text(label) },
+                            onClick = {
+                                priorityIndex = idx
+                                showPrioMenu = false
+                            }
+                        )
+                    }
+                }
+            }
+
+            // Bouton ajouter
+            Button(
+                onClick = {
+                    val timeForDue = if (hasDueTime) selectedTime else LocalTime.of(23, 59)
+                    val dueAtMillis = ZonedDateTime.of(selectedDate, timeForDue, ZoneId.systemDefault())
+                        .toInstant().toEpochMilli()
+
+                    if (title.isNotBlank()) {
+                        vm.addTask(
+                            title = title.trim(),
+                            dueAt = dueAtMillis,
+                            priority = priorityIndex // 0..3
+                        )
+                        title = ""
+                    }
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) { Text("Ajouter") }
 
             Divider()
 
-            // ---- Liste ----
-            TasksList(
-                tasks = state.tasks,
-                onDelete = vm::delete
-            )
-        }
-    }
-}
+            // ---- Liste des tâches ----
+            Text("Mes tâches", style = MaterialTheme.typography.titleMedium)
 
-@Composable
-private fun PriorityChips(
-    selected: Int,
-    onSelect: (Int) -> Unit
-) {
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        (1..5).forEach { p ->
-            val isSel = p == selected
-            Button(
-                onClick = { onSelect(p) },
-                enabled = !isSel
-            ) { Text("P$p") }
-        }
-    }
-}
-
-@Composable
-private fun DateTimePickersRow(
-    date: LocalDate,
-    onPickDate: (LocalDate) -> Unit,
-    hasTime: Boolean,
-    time: LocalTime,
-    onPickTime: (LocalTime) -> Unit,
-    onClearTime: () -> Unit
-) {
-    val ctx = LocalContext.current
-    val locale = Locale.getDefault()
-    val dateFmt = remember { DateTimeFormatter.ofPattern("EEE d MMM yyyy", locale) }
-    val timeFmt = remember { DateTimeFormatter.ofPattern("HH:mm", locale) }
-
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        // Date
-        Button(onClick = {
-            DatePickerDialog(
-                ctx,
-                { _, y, m, d ->
-                    onPickDate(LocalDate.of(y, m + 1, d))
-                },
-                date.year,
-                date.monthValue - 1,
-                date.dayOfMonth
-            ).show()
-        }) {
-            Text(date.format(dateFmt))
-        }
-
-        // Heure
-        if (hasTime) {
-            Button(onClick = {
-                TimePickerDialog(
-                    ctx,
-                    { _, h, min -> onPickTime(LocalTime.of(h, min)) },
-                    time.hour,
-                    time.minute,
-                    true
-                ).show()
-            }) { Text(time.format(timeFmt)) }
-
-            Button(onClick = onClearTime) { Text("Sans heure") }
-        } else {
-            Button(onClick = {
-                TimePickerDialog(
-                    ctx,
-                    { _, h, min -> onPickTime(LocalTime.of(h, min)) },
-                    18,
-                    0,
-                    true
-                ).show()
-            }) { Text("Ajouter une heure") }
-        }
-    }
-}
-
-@Composable
-private fun TasksList(
-    tasks: List<TaskEntity>,
-    onDelete: (Long) -> Unit
-) {
-    val zone = ZoneId.systemDefault()
-    val timeFmt = remember { DateTimeFormatter.ofPattern("EEE d MMM • HH:mm", Locale.getDefault()) }
-    val dateFmt = remember { DateTimeFormatter.ofPattern("EEE d MMM", Locale.getDefault()) }
-
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp)
-    ) {
-        if (tasks.isEmpty()) {
-            item {
-                Text(
-                    "Aucune tâche",
-                    modifier = Modifier.padding(16.dp),
-                    style = MaterialTheme.typography.bodyMedium
-                )
-            }
-        } else {
-            items(tasks, key = { it.id }) { t ->
-                val z = t.dueAt.atZone(zone)
-                val subtitle =
-                    if (z.toLocalTime().hour == 0 && z.toLocalTime().minute == 0) {
-                        z.toLocalDate().format(dateFmt)
-                    } else {
-                        z.format(timeFmt)
-                    }
-
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
+            if (tasks.isEmpty()) {
+                Text("Aucune tâche pour l’instant.")
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Column(
-                        modifier = Modifier
-                            .weight(1f)
-                            .padding(end = 8.dp)
-                    ) {
-                        Text(t.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(
-                            "P${t.priority} • $subtitle",
-                            style = MaterialTheme.typography.bodySmall
+                    items(tasks, key = { it.id }) { t ->
+                        TaskRow(
+                            title = t.title,
+                            dueAt = t.dueAt,
+                            priorityIdx = t.priority,
+                            onRemove = { vm.removeTask(t.id) }
                         )
                     }
-                    Button(onClick = { onDelete(t.id) }) { Text("Suppr") }
                 }
-                Divider()
             }
+        }
+    }
+}
+
+@Composable
+private fun TaskRow(
+    title: String,
+    dueAt: Long,
+    priorityIdx: Int,
+    onRemove: () -> Unit
+) {
+    val dateTime = remember(dueAt) {
+        val zdt = Instant.ofEpochMilli(dueAt).atZone(ZoneId.systemDefault())
+        val d = zdt.toLocalDate().toString()
+        val t = zdt.toLocalTime().withSecond(0).withNano(0).toString()
+        "$d $t"
+    }
+    val prioLabel = remember(priorityIdx) {
+        listOf("P1", "P2", "P3", "P4").getOrElse(priorityIdx) { "P${priorityIdx + 1}" }
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .padding(12.dp)
+                .fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                Text(title, style = MaterialTheme.typography.titleMedium)
+                Text("Échéance : $dateTime", style = MaterialTheme.typography.bodySmall)
+                Text("Priorité : $prioLabel", style = MaterialTheme.typography.bodySmall)
+            }
+            TextButton(onClick = onRemove) { Text("Supprimer") }
         }
     }
 }

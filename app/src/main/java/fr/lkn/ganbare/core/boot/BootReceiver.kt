@@ -3,25 +3,18 @@ package fr.lkn.ganbare.core.boot
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import fr.lkn.ganbare.core.prefs.PreferencesManager
-import fr.lkn.ganbare.core.work.Scheduler
+import fr.lkn.ganbare.core.work.RemindersScheduler
+import java.time.LocalTime
 
-/**
- * Reprogramme (ou annule) la notif quotidienne au boot et après mise à jour d’app.
- */
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
-        when (intent?.action) {
-            Intent.ACTION_BOOT_COMPLETED,
-            Intent.ACTION_MY_PACKAGE_REPLACED -> {
-                val prefs = PreferencesManager(context)
-                val s = prefs.current()
-                if (s.recapEnabled) {
-                    Scheduler.scheduleDailySummary(context, s.recapHour, s.recapMinute)
-                } else {
-                    Scheduler.cancelDailySummary(context)
-                }
-            }
-        }
+        if (intent?.action != Intent.ACTION_BOOT_COMPLETED) return
+
+        // TODO: injecter/accéder à ton repo pour relire les tâches et replanifier :
+        // repo.getAll().forEach { task ->
+        //   RemindersScheduler.scheduleForTask(
+        //      context, task.id, task.title, task.dueAt, task.priority, summaryTime = LocalTime.of(20,0)
+        //   )
+        // }
     }
 }

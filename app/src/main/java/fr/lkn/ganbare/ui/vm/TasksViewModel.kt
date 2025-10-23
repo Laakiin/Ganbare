@@ -1,114 +1,114 @@
 package fr.lkn.ganbare.ui.vm
 
-import androidx.lifecycle.ViewModel
-import androidx.lifecycle.ViewModelProvider
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import fr.lkn.ganbare.feature.tasks.data.TaskEntity
-import fr.lkn.ganbare.feature.tasks.data.TaskRepository
+import fr.lkn.ganbare.core.work.RemindersScheduler
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import java.time.Instant
-import java.time.LocalDate
-import java.time.LocalDateTime
 import java.time.LocalTime
-import java.time.ZoneId
 
-data class NewTaskUi(
-    val title: String = "",
-    val priority: Int = 1,
-    val date: LocalDate = LocalDate.now(),         // choisi via DatePicker
-    val time: LocalTime = LocalTime.of(18, 0),     // choisi via TimePicker
-    val hasDueTime: Boolean = true                 // si false -> échéance à 00:00
-)
+/**
+ * NOTE :
+ * - Cette VM maintient un état en mémoire pour lister les tâches.
+ * - Tu peux facilement brancher ton repository persistant :
+ *   - Remplace les ajouts/suppressions/edits par des appels Room/DAO,
+ *   - Récupère l'id créé et appelle scheduleForTask(...) juste après l'insertion,
+ *   - Appelle cancelForTask(...) avant suppression.
+ */
+class TasksViewModel(app: Application) : AndroidViewModel(app) {
 
-data class TasksUiState(
-    val tasks: List<TaskEntity> = emptyList(),
-    val newTask: NewTaskUi = NewTaskUi(),
-    val isSaving: Boolean = false,
-    val error: String? = null
-)
+    data class TaskVM(
+        val id: Long,
+        val title: String,
+        val dueAt: Long,   // epoch millis UTC
+        val priority: Int  // 0..3 (P1..P4 -> 1..4 acceptés aussi par le scheduler)
+    )
 
-class TasksViewModel(
-    private val repo: TaskRepository
-) : ViewModel() {
+    private val _tasks = MutableStateFlow<List<TaskVM>>(emptyList())
+    val tasks: StateFlow<List<TaskVM>> = _tasks
 
-    private val _new = MutableStateFlow(NewTaskUi())
-    val new: StateFlow<NewTaskUi> = _new.asStateFlow()
+    /** Ajout utilisé par l'écran "Tâches" : signature attendue par ton UI (title, dueAt, priority) */
+    fun addTask(title: String, dueAt: Long, priority: Int) {
+        val id = System.currentTimeMillis() // à remplacer par l'id DB une fois branché
+        val task = TaskVM(id = id, title = title, dueAt = dueAt, priority = priority)
 
-    val state: StateFlow<TasksUiState> =
-        repo.observeAll()
-            .map { list -> TasksUiState(tasks = list, newTask = _new.value) }
-            .stateIn(viewModelScope, SharingStarted.Eagerly, TasksUiState())
+        // Mise à jour locale
+        _tasks.value = _tasks.value + task
 
-    fun onTitleChange(t: String) {
-        _new.value = _new.value.copy(title = t)
+        // Planif des rappels (lecture des réglages utilisateur en DataStore)
+        viewModelScope.launch {
+            RemindersScheduler.scheduleForTask(
+                context = getApplication(),
+                taskId = task.id,
+                title = task.title,
+                dueAtMillis = task.dueAt,
+                priority = task.priority,
+                // Tu peux passer l'heure de récap depuis tes prefs actuelles ; null => 20:00
+                summaryTime = null // LocalTime.of(20, 0)
+            )
+        }
     }
 
-    fun onPriorityChange(p: Int) {
-        _new.value = _new.value.copy(priority = p.coerceIn(1, 5))
-    }
-
-    fun onDatePicked(date: LocalDate) {
-        _new.value = _new.value.copy(date = date)
-    }
-
-    fun onTimePicked(time: LocalTime) {
-        _new.value = _new.value.copy(time = time, hasDueTime = true)
-    }
-
-    fun clearTime() {
-        _new.value = _new.value.copy(hasDueTime = false)
-    }
-
-    fun addTask() {
-        val cur = _new.value
-        if (cur.title.isBlank()) return
-
-        val zone = ZoneId.systemDefault()
-        val dueInstant: Instant =
-            if (cur.hasDueTime) {
-                LocalDateTime.of(cur.date, cur.time).atZone(zone).toInstant()
-            } else {
-                cur.date.atStartOfDay(zone).toInstant()
-            }
+    /** Edition (replanifie les rappels) */
+    fun editTask(id: Long, newTitle: String, newDueAt: Long, newPriority: Int) {
+        val current = _tasks.value.toMutableList()
+        val idx = current.indexOfFirst { it.id == id }
+        if (idx < 0) return
+        current[idx] = current[idx].copy(title = newTitle, dueAt = newDueAt, priority = newPriority)
+        _tasks.value = current
 
         viewModelScope.launch {
-            repo.upsert(
-                TaskEntity(
-                    id = 0,
-                    title = cur.title.trim(),
-                    dueAt = dueInstant,
-                    priority = cur.priority,
-                    notes = null
+            // On remplace les works par de nouveaux (ExistingWorkPolicy.REPLACE dans le scheduler)
+            RemindersScheduler.scheduleForTask(
+                context = getApplication(),
+                taskId = id,
+                title = newTitle,
+                dueAtMillis = newDueAt,
+                priority = newPriority,
+                summaryTime = null
+            )
+        }
+    }
+
+    /** Suppression (annule les rappels) */
+    fun removeTask(id: Long) {
+        _tasks.value = _tasks.value.filterNot { it.id == id }
+        viewModelScope.launch {
+            RemindersScheduler.cancelForTask(getApplication(), id)
+        }
+    }
+
+    // ---------- Helpers possibles si tu veux brancher un repo plus tard ----------
+
+    /** Appeler ceci après avoir inséré en DB et obtenu l'id officiel */
+    fun scheduleForExistingTask(id: Long, title: String, dueAt: Long, priority: Int, summaryTime: LocalTime? = null) {
+        viewModelScope.launch {
+            RemindersScheduler.scheduleForTask(
+                context = getApplication(),
+                taskId = id,
+                title = title,
+                dueAtMillis = dueAt,
+                priority = priority,
+                summaryTime = summaryTime
+            )
+        }
+    }
+
+    /** Replanifie pour toutes les tâches (ex. après reboot si tu veux) */
+    fun rescheduleAll(summaryTime: LocalTime? = null) {
+        viewModelScope.launch {
+            _tasks.value.forEach { t ->
+                RemindersScheduler.scheduleForTask(
+                    context = getApplication(),
+                    taskId = t.id,
+                    title = t.title,
+                    dueAtMillis = t.dueAt,
+                    priority = t.priority,
+                    summaryTime = summaryTime
                 )
-            )
-            // reset pour la prochaine saisie (on garde priorité + heure choisie)
-            _new.value = _new.value.copy(
-                title = "",
-                date = LocalDate.now()
-            )
-        }
-    }
-
-    fun delete(id: Long) {
-        viewModelScope.launch {
-            val task = state.value.tasks.firstOrNull { it.id == id } ?: return@launch
-            repo.delete(task)
-        }
-    }
-
-    companion object {
-        fun factory(repo: TaskRepository): ViewModelProvider.Factory =
-            object : ViewModelProvider.Factory {
-                @Suppress("UNCHECKED_CAST")
-                override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                    return TasksViewModel(repo) as T
-                }
             }
+        }
     }
 }

@@ -1,162 +1,247 @@
 package fr.lkn.ganbare.ui.screens
 
 import android.app.TimePickerDialog
-import android.widget.Toast
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.ui.Alignment
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import fr.lkn.ganbare.core.work.Scheduler
-import fr.lkn.ganbare.ui.vm.SettingsViewModel
-import java.util.Locale
+import fr.lkn.ganbare.core.reminders.Recurrence
+import java.time.LocalTime
+import java.time.format.DateTimeFormatter
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
-    vm: SettingsViewModel = run {
-        val ctx = LocalContext.current
-        viewModel(factory = SettingsViewModel.factory(ctx))
-    }
+    vm: SettingsViewModel = viewModel(),
 ) {
-    val state by vm.state.collectAsStateWithLifecycle()
-    val context = LocalContext.current
+    val ui by vm.ui.collectAsState()
+    val tf = remember { DateTimeFormatter.ofPattern("HH:mm") }
+    var tabIndex by remember { mutableStateOf(0) }
 
-    Scaffold(topBar = { CenterAlignedTopAppBar(title = { Text("Récap & Réglages") }) }) { padding ->
+    Scaffold(
+        topBar = { TopAppBar(title = { Text("Réglages") }) }
+    ) { paddings ->
         Column(
-            modifier = Modifier.padding(padding).padding(16.dp).fillMaxSize(),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+            modifier = Modifier
+                .padding(paddings)
+                .fillMaxSize()
         ) {
-            OutlinedTextField(
-                value = state.icalUrl,
-                onValueChange = vm::onIcalUrlChange,
-                label = { Text("Lien iCal (https://…)") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
-            AssistiveInfo("Colle ici l’URL iCal de ton emploi du temps.")
-
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text("Notification récap du lendemain", style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        "Envoie une notif avec les cours de demain à l’heure choisie.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-                Switch(checked = state.recapEnabled, onCheckedChange = vm::onRecapEnabledChange)
+            TabRow(selectedTabIndex = tabIndex) {
+                Tab(
+                    selected = tabIndex == 0,
+                    onClick = { tabIndex = 0 },
+                    text = { Text("Tâches") }
+                )
+                Tab(
+                    selected = tabIndex == 1,
+                    onClick = { tabIndex = 1 },
+                    text = { Text("Planning") }
+                )
             }
 
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text("Heure du récap", style = MaterialTheme.typography.titleMedium)
-                    Text(formatTime(state.recapHour, state.recapMinute), style = MaterialTheme.typography.bodyLarge)
-                }
-                Button(onClick = {
-                    showTimePickerDialog(
-                        context = context,
-                        initialHour = state.recapHour,
-                        initialMinute = state.recapMinute
-                    ) { h, m -> vm.onHourMinuteChange(h, m) }
-                }) { Text("Modifier") }
+            when (tabIndex) {
+                0 -> TasksSettingsTab(
+                    ui = ui,
+                    onP1 = vm::setP1,
+                    onP2 = vm::setP2,
+                    onP3 = vm::setP3,
+                    onP4 = vm::setP4,
+                    onDayBefore = vm::toggleDayBefore,
+                    onTwoHours = vm::toggleTwoHours,
+                    onOnDay = vm::toggleOnDay
+                )
+                1 -> PlanningSettingsTab(
+                    summaryTime = ui.dailySummaryTime,
+                    firstEventInfoTime = ui.firstEventInfoTime,
+                    rolloverTime = ui.agendaRolloverTime,
+                    onSummaryTime = vm::setDailySummaryTime,
+                    onFirstEventTime = vm::setFirstEventInfoTime,
+                    onRolloverTime = vm::setAgendaRolloverTime
+                )
             }
 
             Spacer(Modifier.height(8.dp))
-            Text("Planning", style = MaterialTheme.typography.titleMedium)
-
             Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp)
             ) {
-                Column(Modifier.weight(1f)) {
-                    Text("Heure de bascule jour suivant", style = MaterialTheme.typography.titleMedium)
-                    Text(formatTime(state.switchHour, state.switchMinute), style = MaterialTheme.typography.bodyLarge)
-                }
-                Button(onClick = {
-                    showTimePickerDialog(
-                        context = context,
-                        initialHour = state.switchHour,
-                        initialMinute = state.switchMinute
-                    ) { h, m -> vm.onSwitchHourMinuteChange(h, m) }
-                }) { Text("Modifier") }
-            }
-            AssistiveInfo("Avant cette heure, le Planning affiche AUJOURD’HUI ; après, il affiche DEMAIN.")
-
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Button(
-                    onClick = {
-                        vm.saveAll()
-                        Toast.makeText(context, "Préférences sauvegardées", Toast.LENGTH_SHORT).show()
-                    },
-                    enabled = !state.isSaving
+                    onClick = vm::save,
+                    enabled = !ui.isSaving,
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    if (state.isSaving) {
-                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                        Spacer(Modifier.width(8.dp))
-                    }
-                    Text("Sauvegarder")
+                    Text(if (ui.isSaving) "Enregistrement..." else "Enregistrer")
                 }
-
-                // 🔧 Bouton de test : lance le worker dans 10 secondes
-                OutlinedButton(onClick = {
-                    Scheduler.debugRunIn(context, 10)
-                    Toast.makeText(context, "Test programmé dans 10s", Toast.LENGTH_SHORT).show()
-                }) {
-                    Text("Tester (10s)")
-                }
-            }
-
-            Spacer(Modifier.weight(1f))
-            Text(
-                "Astuce : la bascule n’affecte que la date par défaut du Planning.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-
-            state.error?.let {
-                Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
             }
         }
     }
 }
 
-private fun showTimePickerDialog(
-    context: android.content.Context,
-    initialHour: Int,
-    initialMinute: Int,
-    onPicked: (Int, Int) -> Unit
+@Composable
+private fun TasksSettingsTab(
+    ui: RecurrenceUiState,
+    onP1: (Recurrence) -> Unit,
+    onP2: (Recurrence) -> Unit,
+    onP3: (Recurrence) -> Unit,
+    onP4: (Recurrence) -> Unit,
+    onDayBefore: (Boolean) -> Unit,
+    onTwoHours: (Boolean) -> Unit,
+    onOnDay: (Boolean) -> Unit
 ) {
-    android.app.TimePickerDialog(
-        context,
-        { _, h, m -> onPicked(h, m) },
-        initialHour.coerceIn(0, 23),
-        initialMinute.coerceIn(0, 59),
-        true
-    ).show()
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        Text("Notifications de tâches", style = MaterialTheme.typography.titleMedium)
+
+        RecurrenceRow(label = "P1 (priorité 1)", value = ui.p1, onChange = onP1)
+        RecurrenceRow(label = "P2 (priorité 2)", value = ui.p2, onChange = onP2)
+        RecurrenceRow(label = "P3 (priorité 3)", value = ui.p3, onChange = onP3)
+        RecurrenceRow(label = "P4 (priorité 4)", value = ui.p4, onChange = onP4)
+
+        Divider()
+
+        Text("Rappels systématiques", style = MaterialTheme.typography.titleMedium)
+        SwitchRow("Rappel la veille (à l’heure du récap)", ui.enableDayBefore, onDayBefore)
+        SwitchRow("Rappel 2 heures avant", ui.enableTwoHoursBefore, onTwoHours)
+        SwitchRow("Rappel le jour J (à l’heure du récap)", ui.enableOnDay, onOnDay)
+
+        Text(
+            "Astuce : les rappels « veille » et « jour J » utilisent l’heure du récap définie dans l’onglet Planning.",
+            style = MaterialTheme.typography.bodySmall
+        )
+    }
 }
 
 @Composable
-private fun AssistiveInfo(text: String) {
-    Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+private fun PlanningSettingsTab(
+    summaryTime: LocalTime,
+    firstEventInfoTime: LocalTime,
+    rolloverTime: LocalTime,
+    onSummaryTime: (LocalTime) -> Unit,
+    onFirstEventTime: (LocalTime) -> Unit,
+    onRolloverTime: (LocalTime) -> Unit
+) {
+    val tf = remember { DateTimeFormatter.ofPattern("HH:mm") }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        Text("Paramètres du planning", style = MaterialTheme.typography.titleMedium)
+
+        TimePickerRow(
+            label = "Heure du récap quotidien",
+            time = summaryTime,
+            onPick = onSummaryTime,
+            tf = tf
+        )
+
+        TimePickerRow(
+            label = "Heure de la notif « 1er évènement de demain »",
+            time = firstEventInfoTime,
+            onPick = onFirstEventTime,
+            tf = tf
+        )
+
+        TimePickerRow(
+            label = "Heure de changement de jour (afficher l’agenda du lendemain)",
+            time = rolloverTime,
+            onPick = onRolloverTime,
+            tf = tf
+        )
+    }
 }
 
-private fun formatTime(h: Int, m: Int): String =
-    String.format(Locale.getDefault(), "%02d:%02d", h, m)
+@Composable
+private fun TimePickerRow(
+    label: String,
+    time: LocalTime,
+    onPick: (LocalTime) -> Unit,
+    tf: DateTimeFormatter
+) {
+    val ctx = LocalContext.current
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(label, style = MaterialTheme.typography.labelLarge)
+            Text(time.format(tf), style = MaterialTheme.typography.bodyMedium)
+        }
+        OutlinedButton(onClick = {
+            TimePickerDialog(ctx, { _, h, m -> onPick(LocalTime.of(h, m)) }, time.hour, time.minute, true).show()
+        }) { Text("Changer") }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun RecurrenceRow(
+    label: String,
+    value: Recurrence,
+    onChange: (Recurrence) -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(label, style = MaterialTheme.typography.labelLarge)
+        var expanded by remember { mutableStateOf(false) }
+        ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = !expanded }) {
+            OutlinedTextField(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .menuAnchor(),
+                readOnly = true,
+                label = { Text("Récurrence") },
+                value = value.toDisplay(),
+                onValueChange = {},
+                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) }
+            )
+            ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                Recurrence.values().forEach { opt ->
+                    DropdownMenuItem(
+                        text = { Text(opt.toDisplay()) },
+                        onClick = {
+                            onChange(opt)
+                            expanded = false
+                        }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SwitchRow(
+    label: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(label, modifier = Modifier.weight(1f))
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
+    }
+}
+
+private fun Recurrence.toDisplay(): String = when (this) {
+    Recurrence.NONE -> "Aucune"
+    Recurrence.DAILY -> "Quotidienne"
+    Recurrence.WEEKLY -> "Hebdomadaire"
+    Recurrence.MONTHLY -> "Mensuelle (30 j)"
+}
