@@ -46,6 +46,11 @@ class PlanningViewModel(
         setSelectedDate(computeDefaultDate(prefs))
     }
 
+    /** Aller à une date précise (utilisé par le sélecteur de date). */
+    fun jumpTo(date: LocalDate) {
+        setSelectedDate(date)
+    }
+
     private fun moveBy(deltaDays: Long) {
         setSelectedDate(_state.value.selectedDate.plusDays(deltaDays))
     }

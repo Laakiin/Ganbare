@@ -1,6 +1,9 @@
 package fr.lkn.ganbare.ui.screens
 
 import android.app.Application
+import android.app.DatePickerDialog
+import android.content.Context
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -11,6 +14,7 @@ import androidx.compose.material.icons.filled.ArrowForward
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -26,6 +30,7 @@ import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import kotlin.math.abs
 
 @Composable
 fun PlanningScreen(
@@ -39,7 +44,7 @@ fun PlanningScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val app = LocalContext.current.applicationContext as Application
 
-    // ➜ Au lancement : on tente un refresh du fichier local depuis l’URL enregistrée (best-effort)
+    // ➜ Au lancement : tentative de refresh ICS (best-effort)
     var lastDownloadOk by remember { mutableStateOf<Boolean?>(null) }
     LaunchedEffect(Unit) {
         val ok = SettingsViewModel.refreshIcsFromStoredUrl(app)
@@ -47,18 +52,16 @@ fun PlanningScreen(
         if (ok) SettingsViewModel.broadcastRefresh(app)
     }
 
-    // ➜ Présence du fichier local (pour le message d’erreur hors-ligne uniquement)
     val icsFile = SettingsViewModel.activeIcsFile(app)
     val hasLocal = icsFile.exists() && icsFile.length() > 0L
 
     Column(Modifier.fillMaxSize()) {
-        // (Plus d’URL affichée ici)
-
         DateNavigator(
             date = state.selectedDate,
             onPrev = viewModel::previousDay,
             onNext = viewModel::nextDay,
-            onResetAuto = viewModel::resetToAuto
+            onResetAuto = viewModel::resetToAuto,
+            onPickDate = viewModel::jumpTo
         )
 
         when {
@@ -73,7 +76,6 @@ fun PlanningScreen(
                     modifier = Modifier.padding(16.dp),
                     color = MaterialTheme.colorScheme.error
                 )
-                // Message explicite si hors-ligne ET aucun ICS local
                 if (lastDownloadOk == false && !hasLocal) {
                     Text(
                         text = "Impossible de se connecter et aucun fichier ICS enregistré.",
@@ -88,15 +90,19 @@ fun PlanningScreen(
     }
 }
 
+/* --------------------------------- Header / navigation --------------------------------- */
+
 @Composable
 private fun DateNavigator(
     date: LocalDate,
     onPrev: () -> Unit,
     onNext: () -> Unit,
-    onResetAuto: () -> Unit
+    onResetAuto: () -> Unit,
+    onPickDate: (LocalDate) -> Unit
 ) {
     val locale = Locale.getDefault()
     val dateFmt = DateTimeFormatter.ofPattern("EEEE d MMMM yyyy", locale)
+    val ctx = LocalContext.current
 
     Row(
         Modifier
@@ -116,7 +122,12 @@ private fun DateNavigator(
                 },
                 style = MaterialTheme.typography.titleMedium
             )
-            TextButton(onClick = onResetAuto, content = { Text("Revenir (auto)") })
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                TextButton(onClick = onResetAuto) { Text("Revenir (auto)") }
+                TextButton(onClick = {
+                    showDatePickerDialog(ctx, date) { picked -> onPickDate(picked) }
+                }) { Text("Choisir un jour") }
+            }
         }
 
         IconButton(onClick = onNext) {
@@ -125,16 +136,32 @@ private fun DateNavigator(
     }
 }
 
+/* --------------------------------- Liste + pauses --------------------------------- */
+
+private sealed interface AgendaItem { val key: String }
+private data class AgendaEvent(val event: CalendarEvent) : AgendaItem {
+    override val key: String get() = "e_${event.id}"
+}
+private data class AgendaPause(
+    val fromMs: Long,
+    val toMs: Long,
+    val minutes: Long
+) : AgendaItem {
+    override val key: String get() = "p_${fromMs}_${toMs}"
+}
+
 @Composable
 private fun EventsList(events: List<CalendarEvent>) {
-    val timeFmt = DateTimeFormatter.ofPattern("HH:mm")
     val zone = ZoneId.systemDefault()
+    val timeFmt = DateTimeFormatter.ofPattern("HH:mm")
+
+    val items = remember(events) { buildAgendaWithPauses(events) }
 
     LazyColumn(
         contentPadding = PaddingValues(bottom = 24.dp),
         modifier = Modifier.fillMaxSize()
     ) {
-        if (events.isEmpty()) {
+        if (items.isEmpty()) {
             item {
                 Text(
                     "Aucun cours/événement pour ce jour.",
@@ -143,29 +170,137 @@ private fun EventsList(events: List<CalendarEvent>) {
                 )
             }
         } else {
-            items(events, key = { it.id }) { event ->
-                val start = Instant.ofEpochMilli(event.startEpochMillis).atZone(zone)
-                val end = Instant.ofEpochMilli(event.endEpochMillis).atZone(zone)
-                ListItem(
-                    headlineContent = {
-                        Text(
-                            event.title,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+            items(items, key = { it.key }) { item ->
+                when (item) {
+                    is AgendaPause -> {
+                        PauseIntersticeOnDivider(item.minutes)
+                    }
+                    is AgendaEvent -> {
+                        val ev = item.event
+                        val start = Instant.ofEpochMilli(ev.startEpochMillis).atZone(zone)
+                        val end = Instant.ofEpochMilli(ev.endEpochMillis).atZone(zone)
+
+                        val isExam = remember(ev.title) {
+                            ev.title.contains("exam", ignoreCase = true) ||
+                                    ev.title.contains("examen", ignoreCase = true)
+                        }
+
+                        val examColor = Color(0xFFFF1744) // rouge très pétant
+                        val headColor = if (isExam) examColor else MaterialTheme.colorScheme.onSurface
+                        val subColor = if (isExam) examColor else MaterialTheme.colorScheme.onSurfaceVariant
+
+                        ListItem(
+                            headlineContent = {
+                                Text(
+                                    ev.title,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    color = headColor
+                                )
+                            },
+                            supportingContent = {
+                                val loc = ev.location?.takeIf { it.isNotBlank() } ?: ""
+                                Text(
+                                    "${start.toLocalTime().format(timeFmt)} – ${end.toLocalTime().format(timeFmt)}  $loc",
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    color = subColor
+                                )
+                            },
+                            modifier = Modifier.fillMaxWidth()
                         )
-                    },
-                    supportingContent = {
-                        val loc = event.location?.takeIf { it.isNotBlank() } ?: ""
-                        Text(
-                            "${start.toLocalTime().format(timeFmt)} – ${end.toLocalTime().format(timeFmt)}  $loc",
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Divider()
+                        Divider()
+                    }
+                }
             }
         }
     }
+}
+
+private fun buildAgendaWithPauses(events: List<CalendarEvent>): List<AgendaItem> {
+    if (events.isEmpty()) return emptyList()
+    val sorted = events.sortedBy { it.startEpochMillis }
+    val out = mutableListOf<AgendaItem>()
+    var prevEnd: Long? = null
+    for (ev in sorted) {
+        if (prevEnd != null) {
+            val gapMin = ((ev.startEpochMillis - prevEnd!!) / 60000L)
+            if (gapMin > 0) {
+                out += AgendaPause(
+                    fromMs = prevEnd!!,
+                    toMs = ev.startEpochMillis,
+                    minutes = gapMin
+                )
+            }
+        }
+        out += AgendaEvent(ev)
+        prevEnd = ev.endEpochMillis
+    }
+    return out
+}
+
+/* -------- Pause interstice : badge centré + ligne dessous -------- */
+
+@Composable
+private fun PauseIntersticeOnDivider(gapMinutes: Long) {
+    val text = "Pause — ${formatPause(gapMinutes)}"
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 6.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.Center
+        ) {
+            Surface(
+                shape = MaterialTheme.shapes.small,
+                color = MaterialTheme.colorScheme.surface,
+                contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                tonalElevation = 0.dp,
+                shadowElevation = 0.dp
+            ) {
+                Text(
+                    text,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 2.dp),
+                    style = MaterialTheme.typography.labelMedium
+                )
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        Divider(
+            color = MaterialTheme.colorScheme.outlineVariant,
+            thickness = 1.dp
+        )
+    }
+}
+
+/* --------------------------------- Helpers --------------------------------- */
+
+private fun formatPause(minutes: Long): String {
+    val m = abs(minutes)
+    val h = m / 60
+    val mm = m % 60
+    return when {
+        h > 0 && mm > 0 -> "${h} h ${mm} min"
+        h > 0 -> "${h} h"
+        else -> "${mm} min"
+    }
+}
+
+private fun showDatePickerDialog(
+    context: Context,
+    initial: LocalDate,
+    onPicked: (LocalDate) -> Unit
+) {
+    DatePickerDialog(
+        context,
+        { _, year, month, dayOfMonth ->
+            onPicked(LocalDate.of(year, month + 1, dayOfMonth))
+        },
+        initial.year,
+        initial.monthValue - 1,
+        initial.dayOfMonth
+    ).show()
 }
