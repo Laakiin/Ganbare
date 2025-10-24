@@ -1,5 +1,6 @@
 package fr.lkn.ganbare.ui.screens
 
+import android.app.Application
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -7,9 +8,7 @@ import androidx.compose.material3.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowForward
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -21,6 +20,7 @@ import fr.lkn.ganbare.core.prefs.PreferencesManager
 import fr.lkn.ganbare.domain.calendar.CalendarEvent
 import fr.lkn.ganbare.domain.calendar.CalendarRepositoryImpl
 import fr.lkn.ganbare.ui.vm.PlanningViewModel
+import fr.lkn.ganbare.ui.vm.SettingsViewModel
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -37,8 +37,23 @@ fun PlanningScreen(
     }
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val app = LocalContext.current.applicationContext as Application
+
+    // ➜ Au lancement : on tente un refresh du fichier local depuis l’URL enregistrée (best-effort)
+    var lastDownloadOk by remember { mutableStateOf<Boolean?>(null) }
+    LaunchedEffect(Unit) {
+        val ok = SettingsViewModel.refreshIcsFromStoredUrl(app)
+        lastDownloadOk = ok
+        if (ok) SettingsViewModel.broadcastRefresh(app)
+    }
+
+    // ➜ Présence du fichier local (pour le message d’erreur hors-ligne uniquement)
+    val icsFile = SettingsViewModel.activeIcsFile(app)
+    val hasLocal = icsFile.exists() && icsFile.length() > 0L
 
     Column(Modifier.fillMaxSize()) {
+        // (Plus d’URL affichée ici)
+
         DateNavigator(
             date = state.selectedDate,
             onPrev = viewModel::previousDay,
@@ -58,6 +73,13 @@ fun PlanningScreen(
                     modifier = Modifier.padding(16.dp),
                     color = MaterialTheme.colorScheme.error
                 )
+                // Message explicite si hors-ligne ET aucun ICS local
+                if (lastDownloadOk == false && !hasLocal) {
+                    Text(
+                        text = "Impossible de se connecter et aucun fichier ICS enregistré.",
+                        modifier = Modifier.padding(horizontal = 16.dp)
+                    )
+                }
             }
             else -> {
                 EventsList(events = state.events)

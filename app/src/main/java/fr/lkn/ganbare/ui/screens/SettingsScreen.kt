@@ -1,297 +1,324 @@
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+
 package fr.lkn.ganbare.ui.screens
 
+import android.app.Application
 import android.app.TimePickerDialog
-import androidx.compose.foundation.layout.*
+import android.content.Context
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.*
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.runtime.*
+import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedCard
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import fr.lkn.ganbare.core.reminders.Recurrence
 import fr.lkn.ganbare.ui.vm.RecurrenceUiState
 import fr.lkn.ganbare.ui.vm.SettingsViewModel
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
+import java.util.Locale
 
-@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun provideSettingsViewModel(): SettingsViewModel {
+    val app = LocalContext.current.applicationContext as Application
+    return viewModel(
+        modelClass = SettingsViewModel::class.java,
+        factory = ViewModelProvider.AndroidViewModelFactory.getInstance(app)
+    )
+}
+
 @Composable
 fun SettingsScreen(
-    vm: SettingsViewModel = viewModel(),
+    modifier: Modifier = Modifier,
+    vm: SettingsViewModel = provideSettingsViewModel()
 ) {
-    val ui by vm.ui.collectAsState()
-    var tabIndex by remember { mutableStateOf(0) }
+    val state by vm.ui.collectAsState(initial = RecurrenceUiState.default())
+    var selectedTab by remember { mutableStateOf(0) } // 0 = Tâches, 1 = Planning
 
     Scaffold(
         topBar = { TopAppBar(title = { Text("Réglages") }) }
-    ) { paddings ->
+    ) { padding ->
         Column(
-            modifier = Modifier
-                .padding(paddings)
+            modifier = modifier
+                .padding(padding)
                 .fillMaxSize()
         ) {
-            TabRow(selectedTabIndex = tabIndex) {
-                Tab(
-                    selected = tabIndex == 0,
-                    onClick = { tabIndex = 0 },
-                    text = { Text("Tâches") }
-                )
-                Tab(
-                    selected = tabIndex == 1,
-                    onClick = { tabIndex = 1 },
-                    text = { Text("Planning") }
-                )
+            TabRow(selectedTabIndex = selectedTab) {
+                Tab(selected = selectedTab == 0, onClick = { selectedTab = 0 }, text = { Text("Tâches") })
+                Tab(selected = selectedTab == 1, onClick = { selectedTab = 1 }, text = { Text("Planning") })
             }
 
-            when (tabIndex) {
-                0 -> TasksSettingsTab(
-                    ui = ui,
-                    onP1 = vm::setP1,
-                    onP2 = vm::setP2,
-                    onP3 = vm::setP3,
-                    onP4 = vm::setP4,
-                    onDayBefore = vm::toggleDayBefore,
-                    onTwoHours = vm::toggleTwoHours,
-                    onOnDay = vm::toggleOnDay,
-                    onTestDayBefore = vm::testTaskDayBefore,
-                    onTestTwoHours = vm::testTaskTwoHours,
-                    onTestOnDay = vm::testTaskOnDay
-                )
-                1 -> PlanningSettingsTab(
-                    summaryTime = ui.dailySummaryTime,
-                    firstEventInfoTime = ui.firstEventInfoTime,
-                    rolloverTime = ui.agendaRolloverTime,
-                    enableDailySummary = ui.enableDailySummary,
-                    enableFirstEventInfo = ui.enableFirstEventInfo,
-                    onSummaryTime = vm::setDailySummaryTime,
-                    onFirstEventTime = vm::setFirstEventInfoTime,
-                    onRolloverTime = vm::setAgendaRolloverTime,
-                    onEnableSummary = vm::toggleEnableDailySummary,
-                    onEnableFirstEvent = vm::toggleEnableFirstEventInfo,
-                    onTestSummary = vm::testDailySummary,
-                    onTestFirstEvent = vm::testFirstEventInfo
-                )
+            when (selectedTab) {
+                0 -> TasksSettingsTab(state = state, vm = vm)
+                1 -> PlanningSettingsTab(state = state, vm = vm)
+                else -> Unit
             }
 
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(12.dp))
+
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(16.dp)
+                    .padding(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Button(
-                    onClick = vm::save,
-                    enabled = !ui.isSaving,
-                    modifier = Modifier.fillMaxWidth()
+                OutlinedButton(onClick = { vm.reload() }) { Text("Annuler") }
+                Button(onClick = { vm.save() }) {
+                    Text(if (state.isSaving) "Enregistrement..." else "Enregistrer")
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+        }
+    }
+}
+
+@Composable
+private fun TasksSettingsTab(state: RecurrenceUiState, vm: SettingsViewModel) {
+    val scroll = rememberScrollState()
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(scroll)
+            .padding(16.dp)
+    ) {
+        Text("Rappels des tâches", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+
+        Spacer(Modifier.height(8.dp))
+        OutlinedCard(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(12.dp)) {
+                Text("Récurrences par priorité", fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(8.dp))
+                RecurrencePickerRow("P1", state.p1) { vm.setP1(it) }
+                RecurrencePickerRow("P2", state.p2) { vm.setP2(it) }
+                RecurrencePickerRow("P3", state.p3) { vm.setP3(it) }
+                RecurrencePickerRow("P4", state.p4) { vm.setP4(it) }
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        OutlinedCard(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(12.dp)) {
+                Text("Types de notifications", fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(8.dp))
+                LabeledSwitch("Rappel la veille", state.enableDayBefore) { vm.toggleDayBefore(it) }
+                LabeledSwitch("Rappel 2h avant", state.enableTwoHoursBefore) { vm.toggleTwoHours(it) }
+                LabeledSwitch("Rappel jour J", state.enableOnDay) { vm.toggleOnDay(it) }
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        OutlinedCard(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(12.dp)) {
+                Text("Tester les notifications (tâches)", fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { vm.testTaskDayBefore() }) { Text("Test veille") }
+                    OutlinedButton(onClick = { vm.testTaskTwoHours() }) { Text("Test 2h avant") }
+                    OutlinedButton(onClick = { vm.testTaskOnDay() }) { Text("Test jour J") }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PlanningSettingsTab(state: RecurrenceUiState, vm: SettingsViewModel) {
+    val scroll = rememberScrollState()
+    val ctx = LocalContext.current.applicationContext
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(scroll)
+            .padding(16.dp)
+    ) {
+        Text("Planning / Agenda", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+
+        Spacer(Modifier.height(8.dp))
+        OutlinedCard(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(12.dp)) {
+                Text("Calendrier iCal", fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = state.icalUrl,
+                    onValueChange = { vm.setIcalUrl(it) },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    label = { Text("Lien iCal (URL)") },
+                    placeholder = { Text("https://... .ics") }
+                )
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
                 ) {
-                    Text(if (ui.isSaving) "Enregistrement..." else "Enregistrer")
+                    Button(onClick = { vm.applyIcal() }) {
+                        Text("Enregistrer & appliquer")
+                    }
+                }
+
+                // Statut du fichier ICS local
+                Spacer(Modifier.height(8.dp))
+                val (hasLocal, sizeBytes) = SettingsViewModel.hasLocalIcs(ctx)
+                Text(
+                    text = if (hasLocal)
+                        "Fichier ICS local présent (${sizeBytes} o)."
+                    else
+                        "Aucun fichier ICS local.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (hasLocal) MaterialTheme.colorScheme.onSurfaceVariant
+                    else MaterialTheme.colorScheme.error
+                )
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        OutlinedCard(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(12.dp)) {
+                Text("Heures", fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(8.dp))
+
+                TimeRow("Heure du récap quotidien", state.dailySummaryTime) { vm.setDailySummaryTime(it) }
+                TimeRow("Heure de bascule jour (afficher J+1)", state.agendaRolloverTime) { vm.setAgendaRolloverTime(it) }
+                TimeRow("Heure d’envoi \"premier cours demain\"", state.firstEventInfoTime) { vm.setFirstEventInfoTime(it) }
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        OutlinedCard(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(12.dp)) {
+                Text("Types de notifications", fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(8.dp))
+                LabeledSwitch("Activer récap quotidien", state.enableDailySummary) { vm.toggleEnableDailySummary(it) }
+                LabeledSwitch("Activer notif premier cours", state.enableFirstEventInfo) { vm.toggleEnableFirstEventInfo(it) }
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        OutlinedCard(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(12.dp)) {
+                Text("Tester les notifications (planning)", fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { vm.testDailySummary() }) { Text("Test récap") }
+                    OutlinedButton(onClick = { vm.testFirstEventInfo() }) { Text("Test 1er cours") }
                 }
             }
         }
     }
 }
 
-@Composable
-private fun TasksSettingsTab(
-    ui: RecurrenceUiState,
-    onP1: (Recurrence) -> Unit,
-    onP2: (Recurrence) -> Unit,
-    onP3: (Recurrence) -> Unit,
-    onP4: (Recurrence) -> Unit,
-    onDayBefore: (Boolean) -> Unit,
-    onTwoHours: (Boolean) -> Unit,
-    onOnDay: (Boolean) -> Unit,
-    onTestDayBefore: () -> Unit,
-    onTestTwoHours: () -> Unit,
-    onTestOnDay: () -> Unit
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        Text("Notifications de tâches", style = MaterialTheme.typography.titleMedium)
-
-        RecurrenceRow(label = "P1 (priorité 1)", value = ui.p1, onChange = onP1)
-        RecurrenceRow(label = "P2 (priorité 2)", value = ui.p2, onChange = onP2)
-        RecurrenceRow(label = "P3 (priorité 3)", value = ui.p3, onChange = onP3)
-        RecurrenceRow(label = "P4 (priorité 4)", value = ui.p4, onChange = onP4)
-
-        Divider()
-
-        Text("Rappels systématiques", style = MaterialTheme.typography.titleMedium)
-        SwitchRow("Rappel la veille (à l’heure du récap)", ui.enableDayBefore, onDayBefore)
-        SwitchRow("Rappel 2 heures avant", ui.enableTwoHoursBefore, onTwoHours)
-        SwitchRow("Rappel le jour J (à l’heure du récap)", ui.enableOnDay, onOnDay)
-
-        Text(
-            "Astuce : les rappels « veille » et « jour J » utilisent l’heure du récap définie dans l’onglet Planning.",
-            style = MaterialTheme.typography.bodySmall
-        )
-
-        Divider()
-
-        Text("Tester les notifications de tâches", style = MaterialTheme.typography.titleMedium)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = onTestDayBefore) { Text("Tester veille") }
-            OutlinedButton(onClick = onTestTwoHours) { Text("Tester 2 h avant") }
-            OutlinedButton(onClick = onTestOnDay) { Text("Tester jour J") }
-        }
-    }
-}
+/* ---------- UI helpers ---------- */
 
 @Composable
-private fun PlanningSettingsTab(
-    summaryTime: LocalTime,
-    firstEventInfoTime: LocalTime,
-    rolloverTime: LocalTime,
-    enableDailySummary: Boolean,
-    enableFirstEventInfo: Boolean,
-    onSummaryTime: (LocalTime) -> Unit,
-    onFirstEventTime: (LocalTime) -> Unit,
-    onRolloverTime: (LocalTime) -> Unit,
-    onEnableSummary: (Boolean) -> Unit,
-    onEnableFirstEvent: (Boolean) -> Unit,
-    onTestSummary: () -> Unit,
-    onTestFirstEvent: () -> Unit
-) {
-    val tf = remember { DateTimeFormatter.ofPattern("HH:mm") }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        Text("Paramètres du planning", style = MaterialTheme.typography.titleMedium)
-
-        // Switchs d’activation/désactivation des notifs planning
-        SwitchRow(
-            label = "Activer la notif « Récap quotidien »",
-            checked = enableDailySummary,
-            onCheckedChange = onEnableSummary
-        )
-        SwitchRow(
-            label = "Activer la notif « 1er évènement de demain »",
-            checked = enableFirstEventInfo,
-            onCheckedChange = onEnableFirstEvent
-        )
-
-        Divider()
-
-        TimePickerRow(
-            label = "Heure du récap quotidien",
-            time = summaryTime,
-            onPick = onSummaryTime,
-            tf = tf
-        )
-
-        TimePickerRow(
-            label = "Heure de la notif « 1er évènement de demain »",
-            time = firstEventInfoTime,
-            onPick = onFirstEventTime,
-            tf = tf
-        )
-
-        TimePickerRow(
-            label = "Heure de changement de jour (afficher l’agenda du lendemain)",
-            time = rolloverTime,
-            onPick = onRolloverTime,
-            tf = tf
-        )
-
-        Divider()
-
-        Text("Tester les notifications de planning", style = MaterialTheme.typography.titleMedium)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = onTestSummary) { Text("Tester récap") }
-            OutlinedButton(onClick = onTestFirstEvent) { Text("Tester 1er évènement") }
-        }
-    }
-}
-
-@Composable
-private fun TimePickerRow(
-    label: String,
-    time: LocalTime,
-    onPick: (LocalTime) -> Unit,
-    tf: java.time.format.DateTimeFormatter
-) {
-    val ctx = LocalContext.current
+private fun RecurrencePickerRow(label: String, value: Recurrence, onChange: (Recurrence) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    val all = Recurrence.values()
     Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 6.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Column(Modifier.weight(1f)) {
-            Text(label, style = MaterialTheme.typography.labelLarge)
-            Text(time.format(tf), style = MaterialTheme.typography.bodyMedium)
-        }
-        OutlinedButton(onClick = {
-            TimePickerDialog(ctx, { _, h, m -> onPick(LocalTime.of(h, m)) }, time.hour, time.minute, true).show()
-        }) { Text("Changer") }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun RecurrenceRow(
-    label: String,
-    value: Recurrence,
-    onChange: (Recurrence) -> Unit
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(label, style = MaterialTheme.typography.labelLarge)
-        var expanded by remember { mutableStateOf(false) }
-        ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = !expanded }) {
-            OutlinedTextField(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .menuAnchor(),
-                readOnly = true,
-                label = { Text("Récurrence") },
-                value = value.toDisplay(),
-                onValueChange = {},
-                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) }
-            )
-            ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                Recurrence.values().forEach { opt ->
-                    DropdownMenuItem(
-                        text = { Text(opt.toDisplay()) },
-                        onClick = {
-                            onChange(opt)
-                            expanded = false
-                        }
-                    )
-                }
+        Text("$label :", modifier = Modifier.weight(1f))
+        OutlinedButton(onClick = { expanded = true }) { Text(value.label()) }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            all.forEach { r ->
+                DropdownMenuItem(
+                    text = { Text(r.label()) },
+                    onClick = {
+                        onChange(r)
+                        expanded = false
+                    }
+                )
             }
         }
     }
 }
 
+private fun Recurrence.label(): String = when (this) {
+    Recurrence.NONE   -> "Aucune"
+    Recurrence.DAILY  -> "Tous les jours"
+    Recurrence.WEEKLY -> "Toutes les semaines"
+    Recurrence.MONTHLY-> "Tous les mois"
+}
+
 @Composable
-private fun SwitchRow(
-    label: String,
-    checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit
-) {
+private fun LabeledSwitch(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 6.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
     ) {
         Text(label, modifier = Modifier.weight(1f))
         Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
 }
 
-private fun Recurrence.toDisplay(): String = when (this) {
-    Recurrence.NONE -> "Aucune"
-    Recurrence.DAILY -> "Quotidienne"
-    Recurrence.WEEKLY -> "Hebdomadaire"
-    Recurrence.MONTHLY -> "Mensuelle (30 j)"
+@Composable
+private fun TimeRow(label: String, value: LocalTime, onPick: (LocalTime) -> Unit) {
+    val ctx = LocalContext.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 6.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(label, modifier = Modifier.weight(1f))
+        OutlinedButton(onClick = {
+            showTimePickerDialog(ctx, initial = value, onPicked = onPick)
+        }) {
+            Text(value.format(DateTimeFormatter.ofPattern("HH:mm", Locale.getDefault())))
+        }
+    }
+}
+
+// Non-composable helper (appelé depuis onClick)
+private fun showTimePickerDialog(
+    context: Context,
+    initial: LocalTime,
+    onPicked: (LocalTime) -> Unit
+) {
+    TimePickerDialog(
+        context,
+        { _, hourOfDay, minute -> onPicked(LocalTime.of(hourOfDay, minute)) },
+        initial.hour,
+        initial.minute,
+        true
+    ).show()
 }

@@ -1,287 +1,288 @@
 package fr.lkn.ganbare.domain.calendar
 
 import android.content.Context
-import fr.lkn.ganbare.core.prefs.PreferencesManager
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import java.io.BufferedReader
-import java.io.InputStreamReader
-import java.net.HttpURLConnection
-import java.net.URL
+import android.util.Log
+import java.io.File
+import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.ZoneId
-import java.time.ZonedDateTime
+import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
-import java.time.format.DateTimeFormatterBuilder
-import java.time.temporal.ChronoField
+import java.time.format.DateTimeParseException
 import java.util.Locale
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
- * Implémentation réelle: télécharge et parse l'iCal de l'URL sauvegardée.
- * Cache en mémoire pour éviter de reparser à chaque appel.
+ * Lit UNIQUEMENT le fichier local: filesDir/ics_cache/active.ics
+ * (Le téléchargement/maj se fait ailleurs au démarrage.)
  */
 class CalendarRepositoryImpl(
-    private val appContext: Context
+    private val context: Context
 ) : CalendarRepository {
 
-    private val prefs = PreferencesManager(appContext)
+    companion object {
+        private const val TAG = "CalendarRepositoryImpl"
 
-    // Cache simple en mémoire
-    @Volatile private var cachedUrl: String? = null
-    @Volatile private var cachedAtEpochMs: Long = 0L
-    @Volatile private var cachedEvents: List<CalendarEvent> = emptyList()
+        object IcsStore {
+            const val DIR = "ics_cache"
+            const val FILE = "active.ics"
+            fun activeFile(ctx: Context): File = File(File(ctx.filesDir, DIR), FILE)
+        }
+    }
 
-    // Durée max du cache (ms)
-    private val cacheTtlMs: Long = 15 * 60 * 1000 // 15 min
+    /** Impl de l’interface */
+    override suspend fun eventsFor(date: LocalDate): List<CalendarEvent> =
+        eventsForDate(date)
 
-    override suspend fun eventsFor(date: LocalDate): List<CalendarEvent> {
-        val url = prefs.current().icalUrl.trim()
-        if (url.isEmpty()) return emptyList()
-
-        ensureLoaded(url)
-
-        // Filtrer par jour (chevauchement)
+    /** Helper optionnel */
+    suspend fun eventsBetween(start: LocalDate, endInclusive: LocalDate): List<CalendarEvent> {
         val zone = ZoneId.systemDefault()
-        val dayStart = date.atStartOfDay(zone).toInstant().toEpochMilli()
-        val dayEnd = date.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
+        val fromEpoch = start.atStartOfDay(zone).toInstant().toEpochMilli()
+        val toEpoch = endInclusive.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli() - 1
+        val all = readAllEventsFromLocalIcs()
+        return all.filter { it.endEpochMillis >= fromEpoch && it.startEpochMillis <= toEpoch }
+            .sortedBy { it.startEpochMillis }
+    }
 
-        return cachedEvents.filter { ev ->
-            ev.startEpochMillis < dayEnd && ev.endEpochMillis > dayStart
+    // ------------------ lecture + parsing ------------------
+
+    private suspend fun eventsForDate(date: LocalDate): List<CalendarEvent> {
+        val zone = ZoneId.systemDefault()
+        val startEpoch = date.atStartOfDay(zone).toInstant().toEpochMilli()
+        val endEpochExclusive = date.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
+
+        val all = readAllEventsFromLocalIcs()
+        return all.filter { evt ->
+            evt.endEpochMillis > startEpoch && evt.startEpochMillis < endEpochExclusive
         }.sortedBy { it.startEpochMillis }
     }
 
-    private suspend fun ensureLoaded(url: String) {
-        val now = System.currentTimeMillis()
-        val shouldReload = cachedUrl != url ||
-                cachedEvents.isEmpty() ||
-                (now - cachedAtEpochMs) > cacheTtlMs
+    private suspend fun readAllEventsFromLocalIcs(): List<CalendarEvent> = withContext(Dispatchers.IO) {
+        val file = IcsStore.activeFile(context)
+        if (!file.exists() || file.length() == 0L) {
+            Log.w(TAG, "Aucun ICS local: ${file.absolutePath}")
+            return@withContext emptyList()
+        }
+        val raw = try {
+            file.readText()
+        } catch (t: Throwable) {
+            Log.w(TAG, "Lecture ICS échouée", t)
+            return@withContext emptyList()
+        }
 
-        if (!shouldReload) return
+        val events = runCatching { parseIcs(raw) }
+            .onFailure { Log.w(TAG, "Parse ICS échoué", it) }
+            .getOrElse { emptyList() }
 
-        val ics = fetchIcs(url)
-        val events = parseIcs(ics)
-        cachedUrl = url
-        cachedEvents = events
-        cachedAtEpochMs = now
+        Log.d(TAG, "ICS local -> ${events.size} évènement(s) parsé(s)")
+        return@withContext events
     }
 
-    private suspend fun fetchIcs(urlStr: String): String = withContext(Dispatchers.IO) {
-        val url = URL(urlStr)
-        val conn = (url.openConnection() as HttpURLConnection).apply {
-            connectTimeout = 10_000
-            readTimeout = 15_000
-            instanceFollowRedirects = true
-            requestMethod = "GET"
+    // ------------------ Parser ICS tolérant ------------------
+
+    private fun parseIcs(icsText: String): List<CalendarEvent> {
+        if (icsText.isBlank()) return emptyList()
+
+        val unfolded = unfoldIcsLines(icsText)
+        val lines = unfolded.lines()
+
+        val events = mutableListOf<CalendarEvent>()
+
+        var inEvent = false
+        val props = mutableMapOf<String, MutableList<String>>()
+        var tzidStart: String? = null
+        var tzidEnd: String? = null
+        var isStartDateOnly: Boolean = false // VALUE=DATE pour DTSTART
+        var durationIso: String? = null
+
+        fun flushEvent() {
+            if (!inEvent) return
+            inEvent = false
+
+            val summary = firstProp(props, "SUMMARY") ?: "(Sans titre)"
+            val location = firstProp(props, "LOCATION")
+            val uid = firstProp(props, "UID")
+
+            val dtStartStr = firstProp(props, "DTSTART")
+            val dtEndStr = firstProp(props, "DTEND")
+            val hasEndProp = !dtEndStr.isNullOrBlank()
+
+            val startEpoch = parseIcsDateToEpoch(dtStartStr, tzidStart, dateOnly = isStartDateOnly)
+
+            // Déterminer end:
+            val endEpoch: Long? = when {
+                hasEndProp -> parseIcsDateToEpoch(dtEndStr, tzidEnd, dateOnly = isDateOnlyValue(dtEndStr))
+                !hasEndProp && durationIso != null -> {
+                    val base = startEpoch
+                    if (base == null) null else runCatching {
+                        val d = Duration.parse(durationIso)
+                        base + d.toMillis()
+                    }.getOrNull()
+                }
+                // all-day sans DTEND -> +1j
+                !hasEndProp && isStartDateOnly -> startEpoch?.let { it + Duration.ofDays(1).toMillis() - 1 }
+                // défaut: +1h
+                else -> startEpoch?.let { it + Duration.ofHours(1).toMillis() }
+            }
+
+            if (startEpoch != null && endEpoch != null && endEpoch >= startEpoch) {
+                val id = uid ?: buildId(summary, startEpoch, endEpoch, location)
+                events += CalendarEvent(
+                    id = id,
+                    title = summary,
+                    startEpochMillis = startEpoch,
+                    endEpochMillis = endEpoch,
+                    location = location
+                )
+            }
+
+            props.clear()
+            tzidStart = null
+            tzidEnd = null
+            isStartDateOnly = false
+            durationIso = null
         }
-        conn.inputStream.use { input ->
-            BufferedReader(InputStreamReader(input)).use { br ->
-                buildString {
-                    var line = br.readLine()
-                    while (line != null) {
-                        appendLine(line)
-                        line = br.readLine()
+
+        for (ln in lines) {
+            when {
+                ln.equals("BEGIN:VEVENT", ignoreCase = true) -> {
+                    inEvent = true
+                    props.clear()
+                    tzidStart = null
+                    tzidEnd = null
+                    isStartDateOnly = false
+                    durationIso = null
+                }
+                ln.equals("END:VEVENT", ignoreCase = true) -> {
+                    flushEvent()
+                }
+                inEvent -> {
+                    val idx = ln.indexOf(':')
+                    if (idx <= 0) continue
+                    val left = ln.substring(0, idx)
+                    val value = ln.substring(idx + 1).trim()
+                    val propName = left.substringBefore(';').uppercase(Locale.ROOT)
+                    val params = left.substringAfter(';', missingDelimiterValue = "")
+
+                    when (propName) {
+                        "DTSTART" -> {
+                            val p = parseParams(params)
+                            // Conserver TZID si présent (ne pas l’écraser par la suite)
+                            p["TZID"]?.let { if (!it.isNullOrBlank()) tzidStart = it }
+                            val valFlag = p["VALUE"]?.uppercase(Locale.ROOT)
+                            isStartDateOnly = (valFlag == "DATE") || isDateOnlyValue(value)
+                            props.getOrPut(propName) { mutableListOf() }.add(value)
+                        }
+                        "DTEND" -> {
+                            val p = parseParams(params)
+                            p["TZID"]?.let { if (!it.isNullOrBlank()) tzidEnd = it }
+                            props.getOrPut(propName) { mutableListOf() }.add(value)
+                        }
+                        "DURATION" -> {
+                            durationIso = value // ex: PT1H30M
+                            props.getOrPut(propName) { mutableListOf() }.add(value)
+                        }
+                        else -> {
+                            props.getOrPut(propName) { mutableListOf() }.add(value)
+                        }
                     }
                 }
             }
         }
+        flushEvent()
+
+        return events.sortedBy { it.startEpochMillis }
     }
 
-    // ---------------- ICS parsing ----------------
-
-    private data class RawEvent(
-        val uid: String?,
-        val summary: String?,
-        val location: String?,
-        val dtStart: ZonedDateTime,
-        val dtEnd: ZonedDateTime
-    )
-
-    private fun parseIcs(icsRaw: String): List<CalendarEvent> {
-        // "Unfold" des lignes (les lignes commençant par espace/tab sont la suite de la ligne précédente)
-        val unfolded = unfoldIcs(icsRaw)
-
-        // Extraire chaque bloc VEVENT
-        val blocks = extractBlocks(unfolded, "VEVENT")
-
-        val events = mutableListOf<RawEvent>()
-        val sysZone = ZoneId.systemDefault()
-
-        for (block in blocks) {
-            val props = blockToMap(block)
-
-            // DTSTART / DTEND: différents formats (UTC 'Z', TZID=..., VALUE=DATE)
-            val start = parseIcsDateTime("DTSTART", props, sysZone) ?: continue
-            val end = parseIcsDateTime("DTEND", props, sysZone) ?: start.plusHours(1)
-
-            val uid = props["UID"]?.firstOrNull()?.second
-            val summary = props["SUMMARY"]?.firstOrNull()?.second
-            val location = props["LOCATION"]?.firstOrNull()?.second
-
-            events += RawEvent(uid, summary, location, start, end)
-        }
-
-        // Convertir en CalendarEvent
-        return events.map { e ->
-            val id = e.uid ?: stableId(e)
-            CalendarEvent(
-                id = id,
-                title = e.summary ?: "(Sans titre)",
-                startEpochMillis = e.dtStart.toInstant().toEpochMilli(),
-                endEpochMillis = e.dtEnd.toInstant().toEpochMilli(),
-                location = e.location
-            )
-        }
-    }
-
-    private fun stableId(e: RawEvent): String {
-        val base = listOf(
-            e.summary ?: "",
-            e.location ?: "",
-            e.dtStart.toInstant().toEpochMilli().toString(),
-            e.dtEnd.toInstant().toEpochMilli().toString()
-        ).joinToString("|")
-        return base.hashCode().toString()
-    }
-
-    private fun unfoldIcs(ics: String): List<String> {
-        val out = mutableListOf<String>()
-        var current = StringBuilder()
-        ics.lineSequence().forEach { raw ->
-            val line = raw.replace("\r", "")
+    /** Déplie les lignes RFC 5545 (continuations débutant par espace/tab). */
+    private fun unfoldIcsLines(src: String): String {
+        val out = StringBuilder()
+        val iter = src.split("\r\n", "\n").iterator()
+        var current: String? = null
+        while (iter.hasNext()) {
+            val line = iter.next()
             if (line.startsWith(" ") || line.startsWith("\t")) {
-                current.append(line.drop(1))
+                current = (current ?: "") + line.drop(1)
             } else {
-                if (current.isNotEmpty()) out += current.toString()
-                current = StringBuilder(line)
+                if (current != null) out.append(current).append('\n')
+                current = line
             }
         }
-        if (current.isNotEmpty()) out += current.toString()
-        return out
+        if (current != null) out.append(current)
+        return out.toString()
     }
 
-    private fun extractBlocks(lines: List<String>, name: String): List<List<String>> {
-        val begin = "BEGIN:$name"
-        val end = "END:$name"
-        val blocks = mutableListOf<List<String>>()
-        var cur: MutableList<String>? = null
-        for (l in lines) {
+    private fun firstProp(map: Map<String, List<String>>, key: String): String? =
+        map[key]?.firstOrNull()?.takeIf { it.isNotBlank() }
+
+    private fun parseParams(params: String?): Map<String, String?> {
+        if (params.isNullOrBlank()) return emptyMap()
+        return params.split(';').mapNotNull { part ->
+            val eq = part.indexOf('=')
+            if (eq <= 0) null
+            else part.substring(0, eq).trim().uppercase(Locale.ROOT) to part.substring(eq + 1).trim()
+        }.toMap()
+    }
+
+    private fun isDateOnlyValue(v: String?): Boolean =
+        v != null && v.length == 8 && v.all { it.isDigit() } // yyyyMMdd
+
+    private fun parseIcsDateToEpoch(value: String?, tzid: String?, dateOnly: Boolean): Long? {
+        if (value.isNullOrBlank()) return null
+        return try {
             when {
-                l.equals(begin, ignoreCase = true) -> cur = mutableListOf()
-                l.equals(end, ignoreCase = true) -> {
-                    cur?.let { blocks += it.toList() }
-                    cur = null
+                dateOnly -> {
+                    // yyyyMMdd à minuit (zone système)
+                    val d = parseDateOnly(value)
+                    d.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
                 }
-                cur != null -> cur.add(l)
-            }
-        }
-        return blocks
-    }
-
-    /**
-     * Transforme un bloc en map: NOM -> liste de paires (params, valeur)
-     * Exemple:
-     *   DTSTART;TZID=Europe/Paris:20250909T111500
-     * -> key = "DTSTART", params = "TZID=Europe/Paris", value = "20250909T111500"
-     */
-    private fun blockToMap(block: List<String>): Map<String, List<Pair<Map<String, String>, String>>> {
-        val map = linkedMapOf<String, MutableList<Pair<Map<String, String>, String>>>()
-        for (line in block) {
-            val idx = line.indexOf(':')
-            if (idx <= 0) continue
-            val head = line.substring(0, idx)
-            val value = line.substring(idx + 1)
-            val headParts = head.split(';')
-            val name = headParts.first().uppercase(Locale.ROOT).trim()
-            val params = mutableMapOf<String, String>()
-            for (i in 1 until headParts.size) {
-                val p = headParts[i]
-                val eq = p.indexOf('=')
-                if (eq > 0) {
-                    val k = p.substring(0, eq).uppercase(Locale.ROOT).trim()
-                    val v = p.substring(eq + 1).trim()
-                    params[k] = v
-                } else {
-                    params[p.uppercase(Locale.ROOT).trim()] = ""
+                value.endsWith("Z") -> {
+                    val core = value.removeSuffix("Z")
+                    val dt = parseWithPatterns(core, dateTime = true)
+                    dt.atZone(ZoneOffset.UTC).toInstant().toEpochMilli()
                 }
-            }
-            map.getOrPut(name) { mutableListOf() }.add(params to value)
-        }
-        return map
-    }
-
-    /**
-     * Parse un champ DTSTART/DTEND avec gestion:
-     *  - suffixe Z (UTC)
-     *  - TZID=... (ex: Europe/Paris)
-     *  - VALUE=DATE (all-day yyyyMMdd)
-     *  - seconds optionnelles (yyyyMMdd'T'HHmm[ss])
-     */
-    private fun parseIcsDateTime(
-        name: String,
-        props: Map<String, List<Pair<Map<String, String>, String>>>,
-        defaultZone: ZoneId
-    ): ZonedDateTime? {
-        val entries = props[name] ?: return null
-        val (params, raw) = entries.first()
-
-        // All-day ?
-        val isAllDay = params.any { it.key.equals("VALUE", true) && it.value.equals("DATE", true) }
-        if (isAllDay) {
-            val ld = LocalDate.parse(raw, DateTimeFormatter.BASIC_ISO_DATE) // yyyyMMdd
-            return ld.atStartOfDay(defaultZone)
-        }
-
-        // TZID ?
-        val tzid = params.entries.firstOrNull { it.key.equals("TZID", true) }?.value
-        val zone = runCatching { if (tzid != null) ZoneId.of(tzid) else defaultZone }.getOrElse { defaultZone }
-
-        // Z (UTC) ?
-        val valueNoZ = if (raw.endsWith("Z", true)) raw.dropLast(1) else raw
-
-        val ldt = parseLocalDateTimeFlexible(valueNoZ)
-        // Si c'était en UTC (raw se terminait par Z), on considère l'instant UTC puis on convertit vers zone
-        return if (raw.endsWith("Z", true)) {
-            ZonedDateTime.of(ldt, ZoneId.of("UTC")).withZoneSameInstant(zone)
-        } else {
-            ZonedDateTime.of(ldt, zone)
-        }
-    }
-
-    // yyyyMMdd'T'HHmm[ss] -> seconds optionnelles
-    private val dtfOptionalSeconds: DateTimeFormatter by lazy {
-        DateTimeFormatterBuilder()
-            .appendValue(ChronoField.YEAR, 4)
-            .appendValue(ChronoField.MONTH_OF_YEAR, 2)
-            .appendValue(ChronoField.DAY_OF_MONTH, 2)
-            .appendLiteral('T')
-            .appendValue(ChronoField.HOUR_OF_DAY, 2)
-            .appendValue(ChronoField.MINUTE_OF_HOUR, 2)
-            .optionalStart()
-            .appendValue(ChronoField.SECOND_OF_MINUTE, 2)
-            .optionalEnd()
-            .toFormatter(Locale.ROOT)
-    }
-
-    private fun parseLocalDateTimeFlexible(v: String): LocalDateTime {
-        return runCatching {
-            LocalDateTime.parse(v, dtfOptionalSeconds)
-        }.getOrElse {
-            // Fallback robustes: tronque/complète au besoin
-            when {
-                v.length >= 15 -> LocalDateTime.parse(v.substring(0, 15), dtfOptionalSeconds) // yyyyMMddTHHmmss
-                v.length >= 13 -> LocalDateTime.parse(v.substring(0, 13), dtfOptionalSeconds) // yyyyMMddTHHmm
-                v.length == 8  -> LocalDate.parse(v, DateTimeFormatter.BASIC_ISO_DATE).atStartOfDay() // yyyyMMdd
+                value.contains('T') -> {
+                    val ldt = parseWithPatterns(value, dateTime = true)
+                    val zone = tzid?.runCatching { ZoneId.of(this) }?.getOrNull() ?: ZoneId.systemDefault()
+                    ldt.atZone(zone).toInstant().toEpochMilli()
+                }
                 else -> {
-                    // Dernier recours: pad pour atteindre HHmm
-                    val base = when {
-                        v.length < 13 -> v.padEnd(13, '0')
-                        else -> v
-                    }
-                    LocalDateTime.parse(base.take(15), dtfOptionalSeconds)
+                    // fallback : traiter comme date-only si jamais
+                    val d = parseDateOnly(value)
+                    d.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
                 }
             }
+        } catch (t: Throwable) {
+            Log.w(TAG, "parseIcsDateToEpoch échec pour '$value' (tzid=$tzid, dateOnly=$dateOnly)", t)
+            null
         }
+    }
+
+    private fun parseWithPatterns(s: String, dateTime: Boolean): LocalDateTime {
+        val patterns = if (dateTime) listOf(
+            "yyyyMMdd'T'HHmmss",
+            "yyyyMMdd'T'HHmm"
+        ) else listOf("yyyyMMdd")
+        for (p in patterns) {
+            try {
+                val fmt = DateTimeFormatter.ofPattern(p, Locale.ROOT)
+                return LocalDateTime.parse(s, fmt)
+            } catch (_: DateTimeParseException) { /* next */ }
+        }
+        // Ultime fallback (peu probable) – tente un Instant ISO
+        return LocalDateTime.ofInstant(Instant.parse(s), ZoneOffset.UTC)
+    }
+
+    private fun parseDateOnly(s: String): LocalDate {
+        val fmt = DateTimeFormatter.ofPattern("yyyyMMdd", Locale.ROOT)
+        return LocalDate.parse(s, fmt)
+    }
+
+    private fun buildId(title: String, start: Long, end: Long, location: String?): String {
+        val base = "${title.trim()}|$start|$end|${location ?: ""}"
+        return base.hashCode().toString()
     }
 }
