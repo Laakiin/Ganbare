@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Next Event widget (existant) -->
+    <string name="widget_next_event_label">Prochain cours</string>
+    <string name="widget_loading">Chargement…</string>
+    <string name="widget_no_event_title">Aucun cours à venir</string>
+    <string name="widget_no_event_sub">Vous êtes libre pour le moment</string>
+
+    <!-- Top Priority Task widget (nouveau) -->
+    <string name="widget_top_task_label">Tâche prioritaire</string>
+    <string name="widget_top_task_loading_title">Chargement…</string>
+    <string name="widget_top_task_loading_sub">Lecture des tâches</string>
+    <string name="widget_top_task_empty_title">Aucune tâche à venir</string>
+    <string name="widget_top_task_empty_sub">Crée une tâche avec une échéance future</string>
+    <string name="widget_top_task_priority_fmt">Priorité %1$d</string>
+
+    <!-- Samples (aperçu) -->
+    <string name="widget_top_task_title_sample">Tâche la plus prioritaire</string>
+    <string name="widget_top_task_sub_sample">Priorité 3 • Ven 25 Oct • 14:00</string>
+</resources>

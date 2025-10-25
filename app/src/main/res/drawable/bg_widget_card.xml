@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+
+    <!-- Fond opaque sombre pour rester lisible sur n'importe quel fond d'écran -->
+    <solid android:color="#FF1F1F1F" />
+
+    <!-- Coins arrondis -->
+    <corners android:radius="16dp" />
+
+    <!-- Liseré léger pour mieux se détacher -->
+    <stroke
+        android:width="1dp"
+        android:color="#33FFFFFF" />
+</shape>
