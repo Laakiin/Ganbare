@@ -73,7 +73,7 @@ cd Ganbare
 
 ### Ou télécharger l'APK
 
-Rendez-vous sur la page [Releases](https://github.com/Laakiin/Ganbare/releases) pour télécharger la dernière version (`v1.2`).
+Rendez-vous sur la page [Releases](https://github.com/Laakiin/Ganbare/releases) pour télécharger la dernière version.
 
 ---
 
